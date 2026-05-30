@@ -787,6 +787,7 @@ export function createApp() {
     ]);
     const fit = buildContributorFit(context.profile, context.repositories, [], [], context.syncStates, context.repoStats);
     const scoringProfile = buildContributorScoringProfile({ login: parsed.data.login, fit, scoringSnapshot: snapshot });
+    const checkSummaries = await loadCheckSummariesForPullRequests(c.env, parsed.data.repoFullName, pullRequests);
     const analysis = buildLocalBranchAnalysis({
       input: parsed.data,
       repo,
@@ -795,6 +796,7 @@ export function createApp() {
       contributorPullRequests: context.contributorPullRequests,
       recentMergedPullRequests,
       repositories: context.repositories,
+      checkSummaries,
       profile: context.profile,
       outcomeHistory: context.outcomeHistory,
       scoringSnapshot: snapshot,
@@ -1312,6 +1314,11 @@ async function loadContributorFastContext(env: Env, login: string) {
     profile,
     outcomeHistory,
   };
+}
+
+async function loadCheckSummariesForPullRequests(env: Env, repoFullName: string, pullRequests: Array<{ number: number; state?: string | null | undefined }>) {
+  const openPulls = pullRequests.filter((pr) => pr.state === "open");
+  return (await Promise.all(openPulls.map((pr) => listCheckSummaries(env, repoFullName, pr.number)))).flat();
 }
 
 async function loadRepoDataQuality(env: Env, fullName: string) {
