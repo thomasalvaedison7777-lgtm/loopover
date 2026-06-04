@@ -1557,17 +1557,26 @@ export function buildContributorOutcomeHistory(args: {
       };
     })
     .filter((outcome) => outcome.pullRequests + outcome.issues > 0 || outcome.maintainerLane);
+  // When official Gittensor totals are absent, derive every PR/issue total from the same
+  // login-scoped, internally-consistent repoOutcomes (each repo keeps pullRequests >=
+  // merged + open + closed and issues = openIssues + closedIssues). Previously pullRequests/
+  // mergedPullRequests fell back to registeredRepoActivity and openPullRequests to an
+  // unfiltered repoStats sum, breaking the invariant and letting closedPullRequestRate exceed 1.
+  const sumOutcomes = (pick: (outcome: (typeof repoOutcomes)[number]) => number): number => repoOutcomes.reduce((sum, outcome) => sum + pick(outcome), 0);
+  const gittensorTotals = args.profile.gittensor?.totals;
+  const openIssues = gittensorTotals?.openIssues ?? sumOutcomes((outcome) => outcome.openIssues);
+  const closedIssues = gittensorTotals?.closedIssues ?? sumOutcomes((outcome) => outcome.closedIssues);
   const totals = {
-    pullRequests: args.profile.gittensor?.totals.pullRequests ?? args.profile.registeredRepoActivity.pullRequests,
-    mergedPullRequests: args.profile.gittensor?.totals.mergedPullRequests ?? args.profile.registeredRepoActivity.mergedPullRequests,
-    openPullRequests: args.profile.gittensor?.totals.openPullRequests ?? args.repoStats.reduce((sum, stat) => sum + stat.openPullRequests, 0),
-    closedPullRequests: args.profile.gittensor?.totals.closedPullRequests ?? repoOutcomes.reduce((sum, outcome) => sum + outcome.closedPullRequests, 0),
+    pullRequests: gittensorTotals?.pullRequests ?? sumOutcomes((outcome) => outcome.pullRequests),
+    mergedPullRequests: gittensorTotals?.mergedPullRequests ?? sumOutcomes((outcome) => outcome.mergedPullRequests),
+    openPullRequests: gittensorTotals?.openPullRequests ?? sumOutcomes((outcome) => outcome.openPullRequests),
+    closedPullRequests: gittensorTotals?.closedPullRequests ?? sumOutcomes((outcome) => outcome.closedPullRequests),
     closedPullRequestRate: 0,
-    issues: args.profile.registeredRepoActivity.issues,
-    openIssues: args.profile.gittensor?.totals.openIssues ?? repoOutcomes.reduce((sum, outcome) => sum + outcome.openIssues, 0),
-    closedIssues: args.profile.gittensor?.totals.closedIssues ?? repoOutcomes.reduce((sum, outcome) => sum + outcome.closedIssues, 0),
-    solvedIssues: args.profile.gittensor?.totals.solvedIssues ?? repoOutcomes.reduce((sum, outcome) => sum + outcome.solvedIssues, 0),
-    validSolvedIssues: args.profile.gittensor?.totals.validSolvedIssues ?? repoOutcomes.reduce((sum, outcome) => sum + outcome.validSolvedIssues, 0),
+    issues: openIssues + closedIssues,
+    openIssues,
+    closedIssues,
+    solvedIssues: gittensorTotals?.solvedIssues ?? sumOutcomes((outcome) => outcome.solvedIssues),
+    validSolvedIssues: gittensorTotals?.validSolvedIssues ?? sumOutcomes((outcome) => outcome.validSolvedIssues),
     credibility: args.profile.gittensor?.credibility ?? 0,
     issueCredibility: args.profile.gittensor?.issueCredibility ?? 0,
   };
