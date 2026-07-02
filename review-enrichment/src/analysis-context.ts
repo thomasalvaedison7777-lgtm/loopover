@@ -17,6 +17,7 @@ import {
   type BoundedFetchOptions,
   type BoundedFetchResult,
 } from "./external-fetch.js";
+import { isWorkflowPath } from "./workflow-path.js";
 
 type ChangedFile = NonNullable<EnrichRequest["files"]>[number];
 
@@ -422,7 +423,7 @@ function categorizeFile(path: string): FileCategory {
   ) {
     return { path, extension, category: "lockfile" };
   }
-  if (path.startsWith(".github/workflows/")) {
+  if (isWorkflowPath(path)) {
     return { path, extension, category: "workflow" };
   }
   if (

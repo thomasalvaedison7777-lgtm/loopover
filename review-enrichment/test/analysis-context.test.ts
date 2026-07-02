@@ -420,3 +420,28 @@ test("createAnalysisContext treats capped patch scans as added-line presence", (
     true,
   );
 });
+
+test("createAnalysisContext classifies workflow paths case-insensitively", () => {
+  const context = createAnalysisContext({
+    repoFullName: "JSONbored/gittensory",
+    prNumber: 2516,
+    files: [
+      {
+        path: ".github/Workflows/CI.YML",
+        patch: "@@ -1,0 +1,1 @@\n+    - uses: pnpm/action-setup@v3",
+      },
+      {
+        path: "docs/readme.md",
+        patch: "@@ -1,0 +1,1 @@\n+# docs",
+      },
+    ],
+  });
+
+  assert.deepEqual(
+    context.fileCategories.map((file) => [file.path, file.category]),
+    [
+      [".github/Workflows/CI.YML", "workflow"],
+      ["docs/readme.md", "docs"],
+    ],
+  );
+});
