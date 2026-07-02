@@ -5,9 +5,10 @@
 //   3. resolves the appended surfaces[] entries by diffing head vs base, capped at the spec's maxAppendedEntries
 //      (omitted ⇒ today's strict single-entry-only default),
 //   4. rejects a duplicate appended entry when the spec opts into duplicateKeyFields (omitted ⇒ off), and
-//   5. validates EACH remaining appended entry independently and returns one aggregate verdict from
-//      assessSubnetDocument / assessProviderDocument: close if any entry is invalid, manual if any (remaining)
-//      needs manual review, merge only when every entry is clean.
+//   5. validates EACH remaining appended entry independently via the spec's OWN assessAppendedEntry /
+//      assessProviderEntry validators (the orchestrator never hardcodes a domain-specific validator — a spec
+//      with no validator configured gets "manual") and returns one aggregate verdict: close if any entry is
+//      invalid, manual if any (remaining) needs manual review, merge only when every entry is clean.
 // Pure + injectable: unit tests pass a loadFile stub, so no network. The live wiring (a per-repo,
 // flag-gated branch in the review body) is a separate follow-up.
 import {
@@ -15,8 +16,6 @@ import {
   type ProviderAssessment,
   type RegistryLaneSpec,
   type Verdict,
-  assessProviderDocument,
-  assessSubnetDocument,
   classifyRegistryPrScope,
   findDuplicateAppendedEntry,
   toCoreVerdict,
@@ -93,6 +92,12 @@ function duplicateEntryCloseSummary(duplicate: unknown): string {
   return `A surface submission must not duplicate an entry already in this PR or already in the registry${detail} — resubmit without the duplicate.`;
 }
 
+// A spec with no domain-specific validator configured yet (RegistryLaneSpec.assessAppendedEntry /
+// assessProviderEntry) still gets structural gating (scope, entry-count cap, duplicate detection), but the
+// orchestrator can't itself judge the entry's content — route to manual review rather than merge or close.
+const NO_VALIDATOR_ENTRY_SUMMARY = "No validator is configured for this registry's surface entries — routing to review.";
+const NO_VALIDATOR_PROVIDER_SUMMARY = "No validator is configured for this registry's provider submissions — routing to review.";
+
 /**
  * Aggregate N independent per-entry assessments into ONE verdict: close if ANY entry is invalid, manual if ANY
  * (of the remainder) needs manual review (e.g. auth_required), merge only if EVERY entry is clean — mirroring the
@@ -126,9 +131,11 @@ function pickAggregateAssessment(assessments: Assessment[]): Assessment {
  * (a malformed/violating entry, an out-of-range append count, a duplicate entry when the spec opts into
  * duplicateKeyFields, a bundled "mixed-files" PR, an invalid provider) CLOSES with a resubmit message. A PR that
  * is NOT a registry submission at all returns `null` — the surface lane does not apply, so the caller falls
- * through to the generic gate. The only residual MANUAL comes from the per-entry validator (an authenticated
- * interface needing a human to confirm the public auth scheme) — a "very few" case, and one bad entry among
- * several still closes the whole PR (see pickAggregateAssessment).
+ * through to the generic gate. Residual MANUAL comes from two places: the spec's OWN per-entry validator (e.g.
+ * an authenticated interface needing a human to confirm the public auth scheme — a "very few" case, and one bad
+ * entry among several still closes the whole PR, see pickAggregateAssessment) — or, structurally, a spec with no
+ * `assessAppendedEntry`/`assessProviderEntry` configured yet, which still gets scope/count/duplicate gating but
+ * can't itself judge entry content.
  */
 export async function runSurfaceReview(spec: RegistryLaneSpec, input: SurfaceReviewInput): Promise<SurfaceReviewResult | null> {
   const scope = classifyRegistryPrScope(spec, input.changedFiles);
@@ -149,7 +156,11 @@ export async function runSurfaceReview(spec: RegistryLaneSpec, input: SurfaceRev
   }
   const headRaw = await input.loadFile(directFile, "head");
   if (scope.isProvider) {
-    return fromProvider(assessProviderDocument(safeParseJson(headRaw), input.opts));
+    const assessProvider = spec.assessProviderEntry;
+    if (!assessProvider) {
+      return { verdict: "manual", summary: NO_VALIDATOR_PROVIDER_SUMMARY };
+    }
+    return fromProvider(assessProvider(safeParseJson(headRaw), input.opts));
   }
   const baseRaw = await input.loadFile(directFile, "base");
   const appendedEntries = diffAppendedSurfaceEntries(headRaw, baseRaw, spec.collectionField);
@@ -162,9 +173,13 @@ export async function runSurfaceReview(spec: RegistryLaneSpec, input: SurfaceRev
   if (duplicate !== null) {
     return { verdict: "close", summary: duplicateEntryCloseSummary(duplicate[0]) };
   }
+  const assessEntry = spec.assessAppendedEntry;
+  if (!assessEntry) {
+    return { verdict: "manual", summary: NO_VALIDATOR_ENTRY_SUMMARY };
+  }
   const headDoc = safeParseJson(headRaw);
   const assessment = pickAggregateAssessment(
-    appendedEntries.map((appendedEntry) => assessSubnetDocument(headDoc, { ...input.opts, appendedEntry })),
+    appendedEntries.map((appendedEntry) => assessEntry(headDoc, { ...input.opts, appendedEntry })),
   );
   return { verdict: toCoreVerdict(assessment.verdict), summary: assessment.summary, reason: assessment.reason };
 }

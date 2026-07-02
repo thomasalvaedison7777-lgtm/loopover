@@ -683,6 +683,17 @@ export interface RegistryLaneSpec {
    *  JSON comparison for a non-string value). Generic — the engine only duck-types the configured field names off
    *  each entry, it never assumes any domain-specific shape (kind/netuid/etc. are metagraphed's own vocabulary). */
   duplicateKeyFields?: readonly string[];
+  /** Validates ONE appended surfaces[] entry against the whole document (root shape + the specific entry) and
+   *  returns its Assessment — the registry's own domain-specific semantic check (shape/safety/business rules).
+   *  The orchestrator calls this once per appended entry and aggregates the results; it never validates anything
+   *  itself, so a different registry supplies its own function here without touching the orchestrator. Omitted
+   *  ⇒ the orchestrator returns "manual" for entry submissions to this registry (structural gating — scope,
+   *  entry-count cap, duplicate detection — still applies; there's just no domain-specific check configured yet). */
+  assessAppendedEntry?: (document: unknown, opts: { secretsScan?: boolean; sourceUrlValidation?: boolean; appendedEntry: unknown }) => Assessment;
+  /** Validates a flat provider-submission document and returns its ProviderAssessment — the registry's own
+   *  domain-specific check, analogous to `assessAppendedEntry` but for the provider-file scope. Omitted ⇒ the
+   *  orchestrator returns "manual" for provider submissions to this registry. */
+  assessProviderEntry?: (document: unknown, opts?: { secretsScan?: boolean; sourceUrlValidation?: boolean }) => ProviderAssessment;
 }
 
 export type RegistryPrScope = "entry-submission" | "provider-submission" | "mixed-files" | "not-direct-submission";
@@ -801,4 +812,8 @@ export const METAGRAPHED_LANE_SPEC: RegistryLaneSpec = {
   // `url` alone (a subnet's surfaces are distinct interfaces; the same url appearing twice — in one PR or against
   // an entry already registered — is a resubmission, not a new surface).
   duplicateKeyFields: ["url"],
+  // metagraphed's own domain-specific semantic validators (netuid/kind/public_safe/auth_required shape+safety
+  // checks) — supplied here, not hardcoded into the orchestrator, so a different registry can supply its own.
+  assessAppendedEntry: assessSubnetDocument,
+  assessProviderEntry: assessProviderDocument,
 };

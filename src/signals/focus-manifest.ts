@@ -3,6 +3,7 @@ import type { GatePolicyPack, GateRuleMode, JsonValue, RepositorySettings } from
 import { normalizeAutonomyPolicy, normalizeAutoMaintainPolicy } from "../settings/autonomy";
 import { normalizeCommandAuthorizationPolicy } from "../settings/command-authorization";
 import { mergeContributorBlacklists, normalizeContributorBlacklist } from "../settings/contributor-blacklist";
+import { hasUnsafeWildcardCount } from "./change-guardrail";
 import { PUBLIC_LOCAL_PATH_INLINE } from "./redaction";
 
 export type FocusManifestSource = "repo_file" | "api_record" | "none";
@@ -49,9 +50,11 @@ export type FocusManifestGateConfig = {
 // `.gittensory.yml`. Each feature ALSO has a GLOBAL env flag (GITTENSORY_REVIEW_*) that stays a master
 // kill-switch (the feature never runs when its env flag is off, regardless of this block). See
 // review/feature-activation.ts for the resolver (env kill-switch → per-repo override → env-allowlist default).
-// NOTE: only the per-PR REVIEW features whose every activation site is migrated are listed here. grounding,
-// screenshots, and contentLane stay on the GITTENSORY_REVIEW_REPOS allowlist for now (grounding + contentLane are
-// coupled to the merge/close DISPOSITION path; screenshots' capture path needs dedicated coverage) — a follow-up.
+// NOTE: only the per-PR REVIEW features whose every activation site is migrated are listed here. grounding and
+// screenshots stay on the GITTENSORY_REVIEW_REPOS allowlist for now (grounding is coupled to the merge/close
+// DISPOSITION path; screenshots' capture path needs dedicated coverage) — a follow-up. contentLane got its own
+// richer `contentLane:` block below (#2435) instead of a boolean here, since it resolves to a whole
+// RegistryLaneSpec, not an on/off toggle — see resolveRegistryLaneSpec in review/content-lane/spec-resolver.ts.
 export const CONVERGED_FEATURE_KEYS = ["rag", "reputation", "unifiedComment", "safety"] as const;
 export type ConvergedFeatureKey = (typeof CONVERGED_FEATURE_KEYS)[number];
 
@@ -59,6 +62,26 @@ export type ConvergedFeatureKey = (typeof CONVERGED_FEATURE_KEYS)[number];
  *  feature on/off for THIS repo (subject to the env kill-switch); `null` (unset) ⇒ the resolver falls back to the
  *  `GITTENSORY_REVIEW_REPOS` allowlist default, so an operator who sets nothing keeps today's behavior. */
 export type FocusManifestFeaturesConfig = { present: boolean } & Record<ConvergedFeatureKey, boolean | null>;
+
+/**
+ * Per-repo registry-review lane configuration (`contentLane:` block, #2435) — lets a self-hosted maintainer
+ * configure their OWN registry (structural file-scope patterns + entry-count cap + dedup fields) without a
+ * gittensory code change. `entryFileGlob` and `collectionField` are the two REQUIRED fields to build a usable
+ * spec; `present` is true only when both are set (a partial config degrades to "not configured," not a broken
+ * half-spec — see `parseContentLaneConfig`). `validatorId` optionally references a code-registered domain
+ * validator (`review/content-lane/spec-resolver.ts`'s `REGISTRY_VALIDATORS`); omitted ⇒ structural gating only
+ * (scope/count/dedup), no domain-specific semantic check — see `RegistryLaneSpec.assessAppendedEntry`.
+ */
+export type FocusManifestContentLaneConfig = {
+  present: boolean;
+  entryFileGlob: string | null;
+  providerFileGlob: string | null;
+  artifactGlob: string | null;
+  collectionField: string | null;
+  maxAppendedEntries: number | null;
+  duplicateKeyFields: string[];
+  validatorId: string | null;
+};
 
 /**
  * Generic repository-settings override declared in `.gittensory.yml` under `settings:`. A partial of
@@ -197,6 +220,7 @@ export type FocusManifest = {
   settings: FocusManifestSettings;
   review: FocusManifestReviewConfig;
   features: FocusManifestFeaturesConfig;
+  contentLane: FocusManifestContentLaneConfig;
   warnings: string[];
 };
 
@@ -269,6 +293,17 @@ const EMPTY_FEATURES_CONFIG: FocusManifestFeaturesConfig = {
   safety: null,
 };
 
+const EMPTY_CONTENT_LANE_CONFIG: FocusManifestContentLaneConfig = {
+  present: false,
+  entryFileGlob: null,
+  providerFileGlob: null,
+  artifactGlob: null,
+  collectionField: null,
+  maxAppendedEntries: null,
+  duplicateKeyFields: [],
+  validatorId: null,
+};
+
 const EMPTY_MANIFEST: FocusManifest = {
   present: false,
   source: "none",
@@ -284,6 +319,7 @@ const EMPTY_MANIFEST: FocusManifest = {
   settings: {},
   review: { present: false, footerText: null, note: null, fields: {}, profile: null, inlineComments: null, pathInstructions: [], instructions: null, excludePaths: [], preMergeChecks: [] },
   features: { ...EMPTY_FEATURES_CONFIG },
+  contentLane: { ...EMPTY_CONTENT_LANE_CONFIG },
   warnings: [],
 };
 
@@ -304,7 +340,16 @@ export function isFocusManifestPublicSafe(text: string): boolean {
 }
 
 function emptyManifest(source: FocusManifestSource, warnings: string[] = []): FocusManifest {
-  return { ...EMPTY_MANIFEST, source, warnings, gate: { ...EMPTY_GATE_CONFIG }, settings: {}, review: { present: false, footerText: null, note: null, fields: {}, profile: null, inlineComments: null, pathInstructions: [], instructions: null, excludePaths: [], preMergeChecks: [] }, features: { ...EMPTY_FEATURES_CONFIG } };
+  return {
+    ...EMPTY_MANIFEST,
+    source,
+    warnings,
+    gate: { ...EMPTY_GATE_CONFIG },
+    settings: {},
+    review: { present: false, footerText: null, note: null, fields: {}, profile: null, inlineComments: null, pathInstructions: [], instructions: null, excludePaths: [], preMergeChecks: [] },
+    features: { ...EMPTY_FEATURES_CONFIG },
+    contentLane: { ...EMPTY_CONTENT_LANE_CONFIG },
+  };
 }
 
 function normalizeStringList(value: JsonValue | undefined, field: string, warnings: string[]): string[] {
@@ -561,6 +606,86 @@ export function featuresConfigToJson(features: FocusManifestFeaturesConfig): Jso
   for (const key of CONVERGED_FEATURE_KEYS) {
     if (features[key] !== null) out[key] = features[key];
   }
+  return out;
+}
+
+/** A positive INTEGER count (not a score/confidence) — e.g. `contentLane.maxAppendedEntries` counts discrete
+ *  surfaces[] entries, so a fractional value (a likely typo) would render a nonsensical contributor-facing close
+ *  message ("append between 1 and 2.5 entries"). Rejects fractional and non-positive values alike. */
+function normalizeOptionalPositiveInteger(value: JsonValue | undefined, field: string, warnings: string[]): number | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value === "number" && Number.isInteger(value) && value > 0) return value;
+  warnings.push(`Manifest field "${field}" must be a positive whole number; ignoring it.`);
+  return null;
+}
+
+/** Normalize + bound a maintainer-supplied glob string: trims/length-caps like any other string field, AND
+ *  rejects one globToRegExp (review/content-lane/spec-resolver.ts's reuse of the guardrail-path compiler) would
+ *  itself refuse to compile safely. Reuses `hasUnsafeWildcardCount` — globToRegExp's OWN safety predicate —
+ *  rather than a locally-counted threshold: a caller that counts wildcards differently (e.g. raw `*` characters,
+ *  which double-counts a `**` pair as 2 groups instead of 1) can accept a glob globToRegExp then silently
+ *  compiles to NEVER_MATCHES, configuring a lane that is "present" but can never activate on any changed file
+ *  (#confirmed-bug). A glob over the cap is REJECTED (warns, returns null) rather than truncated — silently
+ *  cutting wildcards out of a maintainer's pattern would silently change its meaning, which is worse than making
+ *  them fix an over-complex glob. */
+function normalizeOptionalGlob(value: JsonValue | undefined, field: string, warnings: string[]): string | null {
+  const normalized = normalizeOptionalString(value, field, warnings);
+  if (normalized === null) return null;
+  if (normalized.length > MAX_ITEM_LENGTH) {
+    // REJECT, not truncate: cutting characters out of a glob changes which files it matches (e.g. a
+    // mid-directory-name cut can turn a narrow, intended pattern into one that matches an unrelated path
+    // prefix, or one that never matches anything) — silently compiling a DIFFERENT pattern than the
+    // maintainer configured is worse than making them shorten an over-complex glob.
+    warnings.push(`Manifest field "${field}" is an over-long glob (${normalized.length} > ${MAX_ITEM_LENGTH} chars); ignoring it.`);
+    return null;
+  }
+  if (hasUnsafeWildcardCount(normalized)) {
+    warnings.push(`Manifest field "${field}" has too many wildcards to compile safely; ignoring it.`);
+    return null;
+  }
+  return normalized;
+}
+
+/**
+ * Parse the optional `contentLane:` mapping — per-repo registry-review lane configuration (#2435). `entryFileGlob`
+ * and `collectionField` are REQUIRED to build a usable spec; a config missing either — including a glob rejected
+ * by `normalizeOptionalGlob`'s wildcard cap — degrades to "not configured" (a warning, falling through to the
+ * allowlist default) rather than a broken half-spec. Glob fields stay plain strings here — compiling them to
+ * RegExp is the resolver's job (`review/content-lane/spec-resolver.ts`), not the parser's, so this file stays
+ * free of a RegExp-from-config compile step; it's still this file's job to keep an over-complex glob from ever
+ * reaching that compile step at all.
+ */
+function parseContentLaneConfig(value: JsonValue | undefined, warnings: string[]): FocusManifestContentLaneConfig {
+  if (value === undefined || value === null) return { ...EMPTY_CONTENT_LANE_CONFIG };
+  if (typeof value !== "object" || Array.isArray(value)) {
+    warnings.push('Manifest field "contentLane" must be a mapping; ignoring it.');
+    return { ...EMPTY_CONTENT_LANE_CONFIG };
+  }
+  const record = value as Record<string, JsonValue>;
+  const entryFileGlob = normalizeOptionalGlob(record.entryFileGlob, "contentLane.entryFileGlob", warnings);
+  const providerFileGlob = normalizeOptionalGlob(record.providerFileGlob, "contentLane.providerFileGlob", warnings);
+  const artifactGlob = normalizeOptionalGlob(record.artifactGlob, "contentLane.artifactGlob", warnings);
+  const collectionField = normalizeOptionalString(record.collectionField, "contentLane.collectionField", warnings);
+  const maxAppendedEntries = normalizeOptionalPositiveInteger(record.maxAppendedEntries, "contentLane.maxAppendedEntries", warnings);
+  const duplicateKeyFields = normalizeStringList(record.duplicateKeyFields, "contentLane.duplicateKeyFields", warnings);
+  const validatorId = normalizeOptionalString(record.validatorId, "contentLane.validatorId", warnings);
+  if (!entryFileGlob || !collectionField) {
+    warnings.push('Manifest field "contentLane" requires both entryFileGlob and collectionField; ignoring it.');
+    return { ...EMPTY_CONTENT_LANE_CONFIG };
+  }
+  return { present: true, entryFileGlob, providerFileGlob, artifactGlob, collectionField, maxAppendedEntries, duplicateKeyFields, validatorId };
+}
+
+/** Serialize a contentLane config back into the parse-compatible `contentLane:` shape so a cached snapshot
+ *  round-trips through {@link parseContentLaneConfig} unchanged. Returns null when nothing is configured. */
+export function contentLaneConfigToJson(contentLane: FocusManifestContentLaneConfig): JsonValue {
+  if (!contentLane.present || !contentLane.entryFileGlob || !contentLane.collectionField) return null;
+  const out: Record<string, JsonValue> = { entryFileGlob: contentLane.entryFileGlob, collectionField: contentLane.collectionField };
+  if (contentLane.providerFileGlob !== null) out.providerFileGlob = contentLane.providerFileGlob;
+  if (contentLane.artifactGlob !== null) out.artifactGlob = contentLane.artifactGlob;
+  if (contentLane.maxAppendedEntries !== null) out.maxAppendedEntries = contentLane.maxAppendedEntries;
+  if (contentLane.duplicateKeyFields.length > 0) out.duplicateKeyFields = contentLane.duplicateKeyFields;
+  if (contentLane.validatorId !== null) out.validatorId = contentLane.validatorId;
   return out;
 }
 
@@ -1065,6 +1190,7 @@ export function parseFocusManifest(raw: unknown, source?: FocusManifestSource): 
     settings: parseSettingsOverride(record.settings, warnings),
     review: parseReviewConfig(record.review, warnings),
     features: parseFeaturesConfig(record.features, warnings),
+    contentLane: parseContentLaneConfig(record.contentLane, warnings),
     warnings,
   };
   if (
@@ -1079,7 +1205,8 @@ export function parseFocusManifest(raw: unknown, source?: FocusManifestSource): 
     !manifest.gate.present &&
     Object.keys(manifest.settings).length === 0 &&
     !manifest.review.present &&
-    !manifest.features.present
+    !manifest.features.present &&
+    !manifest.contentLane.present
   ) {
     warnings.push("Manifest contained no recognized focus fields; falling back to deterministic signals.");
     manifest.present = false;

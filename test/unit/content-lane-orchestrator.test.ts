@@ -4,6 +4,8 @@ import {
   FLAT_PROVIDER_PATTERN,
   METAGRAPHED_LANE_SPEC,
   SUBNET_ENTRY_PATTERN,
+  assessProviderDocument,
+  assessSubnetDocument,
   type RegistryLaneSpec,
 } from "../../src/review/content-lane/registry-logic";
 import { diffAppendedSurfaceEntries, runSurfaceReview, type SurfaceReviewInput } from "../../src/review/content-lane/orchestrator";
@@ -14,12 +16,15 @@ const newEntry2 = { kind: "openapi", url: "https://api2.example.ai", source_url:
 const SUBNET = "registry/subnets/foo.json";
 const PROVIDER = "registry/providers/acme.json";
 // A spec-less-backward-compat stand-in: the default single-entry cap (no maxAppendedEntries override), otherwise
-// identical to metagraphed's file layout so SUBNET still classifies as an entry-submission.
+// identical to metagraphed's file layout (incl. reusing its real validators — this fixture tests the STRUCTURAL
+// layer at a different cap, not a different domain) so SUBNET still classifies as an entry-submission.
 const STRICT_SPEC: RegistryLaneSpec = {
   entryFilePattern: SUBNET_ENTRY_PATTERN,
   providerFilePattern: FLAT_PROVIDER_PATTERN,
   artifactPattern: ARTIFACT_PATTERN,
   collectionField: "surfaces",
+  assessAppendedEntry: assessSubnetDocument,
+  assessProviderEntry: assessProviderDocument,
 };
 
 // Inject a file loader keyed by `${ref}:${path}` so the orchestrator never hits the network.
@@ -305,6 +310,30 @@ describe("runSurfaceReview (deterministic + decisive: merge/close, rarely manual
     expect(r).toEqual({
       verdict: "close",
       summary: "A surface submission must not duplicate an entry already in this PR or already in the registry — resubmit without the duplicate.",
+    });
+  });
+
+  // A spec with no domain-specific validator configured yet: structural gating (scope/count/dedup) still applies,
+  // but the orchestrator can't itself judge entry content — routes to manual instead of merging or closing blind.
+  const UNVALIDATED_SPEC: RegistryLaneSpec = {
+    entryFilePattern: SUBNET_ENTRY_PATTERN,
+    providerFilePattern: FLAT_PROVIDER_PATTERN,
+    collectionField: "surfaces",
+  };
+
+  it("routes a clean single-entry append to MANUAL when the spec has no assessAppendedEntry configured", async () => {
+    const r = await review([SUBNET], { [`head:${SUBNET}`]: doc([existing, newEntry]), [`base:${SUBNET}`]: doc([existing]) }, UNVALIDATED_SPEC);
+    expect(r).toEqual({
+      verdict: "manual",
+      summary: "No validator is configured for this registry's surface entries — routing to review.",
+    });
+  });
+
+  it("routes a provider submission to MANUAL when the spec has no assessProviderEntry configured", async () => {
+    const r = await review([PROVIDER], { [`head:${PROVIDER}`]: JSON.stringify({ provider: { id: "acme", name: "Acme", website_url: "https://acme.example" } }) }, UNVALIDATED_SPEC);
+    expect(r).toEqual({
+      verdict: "manual",
+      summary: "No validator is configured for this registry's provider submissions — routing to review.",
     });
   });
 });
