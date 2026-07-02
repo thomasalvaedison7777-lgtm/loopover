@@ -702,6 +702,17 @@ export interface RegistryScopeResult {
   scope: RegistryPrScope;
   directFile: string | null;
   isProvider: boolean;
+  /** For an "entry-submission" scope only: a companion file that is PATH-SHAPED like a provider submission
+   *  (matches spec.providerFilePattern) riding along with the entry in the same PR, set only when exactly one such
+   *  companion is present. This is classification only — a pure, I/O-free path match — and does NOT by itself
+   *  prove the companion is a genuine DEBUT (a brand-new provider, not an edit to one already in the registry);
+   *  the orchestrator independently confirms that once it has fetched content (see runSurfaceReview's base-
+   *  presence check) before treating it as the debut-provider companion flow. An entry file always wins the scope
+   *  classification over a provider file present in the same PR (so "provider-submission scope with a companion
+   *  entry file" cannot occur — the entry file becomes directFile and the provider file becomes this field
+   *  instead). Null when there is no provider companion, when there is more than one (ambiguous — ordinary
+   *  companion-file review still applies), or when the scope isn't entry-submission. */
+  providerCompanionFile: string | null;
 }
 
 /**
@@ -715,25 +726,36 @@ export function classifyRegistryPrScope(spec: RegistryLaneSpec, changedFiles: st
   const entryFiles = files.filter((f) => spec.entryFilePattern.test(f));
   const providerFiles = spec.providerFilePattern ? files.filter((f) => spec.providerFilePattern!.test(f)) : [];
   if (entryFiles.length > 1 || (entryFiles.length === 0 && providerFiles.length > 1)) {
-    return { scope: "mixed-files", directFile: null, isProvider: false };
+    return { scope: "mixed-files", directFile: null, isProvider: false, providerCompanionFile: null };
   }
   const isEntryPr = entryFiles.length === 1;
   const isProviderPr = entryFiles.length === 0 && providerFiles.length === 1;
   if (!isEntryPr && !isProviderPr) {
-    return { scope: "not-direct-submission", directFile: null, isProvider: false };
+    return { scope: "not-direct-submission", directFile: null, isProvider: false, providerCompanionFile: null };
   }
   const isAllowed = (f: string): boolean =>
     spec.entryFilePattern.test(f) || (spec.providerFilePattern?.test(f) ?? false) || (spec.artifactPattern?.test(f) ?? false);
   if (files.some((f) => !isAllowed(f))) {
-    return { scope: "mixed-files", directFile: null, isProvider: false };
+    return { scope: "mixed-files", directFile: null, isProvider: false, providerCompanionFile: null };
   }
   // isEntryPr/isProviderPr each guarantee exactly one match (guarded by the early return), so [0] is always
-  // defined; the `?? null` only satisfies noUncheckedIndexedAccess and can never fire.
-  /* v8 ignore start */
-  return isProviderPr
-    ? { scope: "provider-submission", directFile: providerFiles[0] ?? null, isProvider: true }
-    : { scope: "entry-submission", directFile: entryFiles[0] ?? null, isProvider: false };
-  /* v8 ignore stop */
+  // defined; the `?? null` fallbacks below only satisfy noUncheckedIndexedAccess and can never fire.
+  if (isProviderPr) {
+    /* v8 ignore next */
+    return { scope: "provider-submission", directFile: providerFiles[0] ?? null, isProvider: true, providerCompanionFile: null };
+  }
+  // isEntryPr: a debut-provider companion is exactly one OTHER providerFilePattern match riding along with the
+  // entry file — more than one is an unrecognized shape (ambiguous which is "the" debut provider) and falls back
+  // to the ordinary companion-file-changes review path in the orchestrator, same as before this field existed.
+  const hasSingleProviderCompanion = providerFiles.length === 1;
+  return {
+    scope: "entry-submission",
+    /* v8 ignore next */
+    directFile: entryFiles[0] ?? null,
+    isProvider: false,
+    /* v8 ignore next -- hasSingleProviderCompanion guarantees providerFiles[0] is defined; the ?? null only satisfies noUncheckedIndexedAccess. */
+    providerCompanionFile: hasSingleProviderCompanion ? (providerFiles[0] ?? null) : null,
+  };
 }
 
 export function isRegistrySubmissionScope(scope: RegistryPrScope): boolean {

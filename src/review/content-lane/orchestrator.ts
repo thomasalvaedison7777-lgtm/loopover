@@ -8,7 +8,11 @@
 //   5. validates EACH remaining appended entry independently via the spec's OWN assessAppendedEntry /
 //      assessProviderEntry validators (the orchestrator never hardcodes a domain-specific validator — a spec
 //      with no validator configured gets "manual") and returns one aggregate verdict: close if any entry is
-//      invalid, manual if any (remaining) needs manual review, merge only when every entry is clean.
+//      invalid, manual if any (remaining) needs manual review, merge only when every entry is clean, and
+//   6. for an entry submission riding alongside a path-shaped provider companion file, confirms the companion is
+//      actually a DEBUT (absent at base — an edit to an already-registered provider routes to manual instead),
+//      then validates it via assessProviderEntry and combines it with the entry's own result — merge only when
+//      BOTH sides are clean.
 // Pure + injectable: unit tests pass a loadFile stub, so no network. The live wiring (a per-repo,
 // flag-gated branch in the review body) is a separate follow-up.
 import {
@@ -95,6 +99,41 @@ function duplicateEntryCloseSummary(): string {
 // orchestrator can't itself judge the entry's content — route to manual review rather than merge or close.
 const NO_VALIDATOR_ENTRY_SUMMARY = "No validator is configured for this registry's surface entries — routing to review.";
 const NO_VALIDATOR_PROVIDER_SUMMARY = "No validator is configured for this registry's provider submissions — routing to review.";
+// classifyRegistryPrScope identifies a provider companion by FILE PATH alone (it does no I/O); that only proves
+// the file is shaped like a provider submission, not that it's a genuine DEBUT (a brand-new provider, not an edit
+// to one already in the registry). The orchestrator independently confirms debut-ness once it has the fetched
+// content — see the base-presence check in runSurfaceReview.
+const NON_DEBUT_COMPANION_SUMMARY =
+  "Registry submission's provider companion already exists in the registry — this isn't a debut provider, so it needs a human to review the edit alongside the entry.";
+
+/**
+ * Combines an entry-submission's aggregate Assessment with its companion debut-provider file's ProviderAssessment
+ * into ONE SurfaceReviewResult — the "entry + debut provider in the same PR" flow. `providerRaw` is already loaded
+ * by the caller (in parallel with the entry's own head/base fetches — see runSurfaceReview), `assessProvider`
+ * already confirmed present, and the companion already confirmed to actually BE a debut (absent at base) — so
+ * this function does no I/O and can't itself punt to "no validator configured" or "not actually a debut".
+ * Reuses `fromProvider` for the provider's own ok/close mapping — the same conversion the standalone provider-
+ * submission scope uses — so the two paths can never silently drift apart. Decisive: close if EITHER side is
+ * invalid, manual if the entry needs manual review and the provider is clean (a provider assessment is itself
+ * always decisive — merge or close, never manual — so it can never be the source of a manual verdict here), merge
+ * only when both are clean (forwarding the provider's own merge summary, same as a standalone provider merge).
+ */
+function assessEntryWithProviderCompanion(
+  assessProvider: NonNullable<RegistryLaneSpec["assessProviderEntry"]>,
+  entryAssessment: Assessment,
+  providerRaw: string | null,
+  opts: SurfaceReviewInput["opts"],
+): SurfaceReviewResult {
+  if (entryAssessment.verdict === "closed") {
+    return { verdict: "close", summary: entryAssessment.summary, reason: entryAssessment.reason };
+  }
+  const providerResult = fromProvider(assessProvider(safeParseJson(providerRaw), opts));
+  if (providerResult.verdict === "close") return providerResult;
+  if (entryAssessment.verdict === "manual-review") {
+    return { verdict: "manual", summary: entryAssessment.summary };
+  }
+  return providerResult;
+}
 
 /**
  * Aggregate N independent per-entry assessments into ONE verdict: close if ANY entry is invalid, manual if ANY
@@ -147,20 +186,48 @@ export async function runSurfaceReview(spec: RegistryLaneSpec, input: SurfaceRev
   }
   // A submission scope (entry/provider) always carries a directFile (classifier invariant; see classifyRegistryPrScope).
   const directFile = scope.directFile as string;
+  const companionProviderFile = scope.providerCompanionFile;
+  // Anything besides the direct file must be a companion the classifier already approved: the recognized debut-
+  // provider companion (validated below) or a spec.artifactPattern match (a generated build artifact — allowed
+  // as-is, never validated). Anything else here is an unrecognized/ambiguous shape (classifyRegistryPrScope only
+  // reaches this scope when every file matched SOME allowed pattern, so this is the residual "which companion is
+  // it" case, e.g. more than one provider companion) — fall back to routing it to manual review.
   for (const file of input.changedFiles) {
     const normalized = file.trim();
-    if (normalized === "" || normalized === directFile) continue;
+    if (normalized === "" || normalized === directFile || normalized === companionProviderFile) continue;
+    if (spec.artifactPattern?.test(normalized)) continue;
     return { verdict: "manual", summary: "Registry submission includes companion file changes — routing to review." };
   }
-  const headRaw = await input.loadFile(directFile, "head");
   if (scope.isProvider) {
     const assessProvider = spec.assessProviderEntry;
     if (!assessProvider) {
       return { verdict: "manual", summary: NO_VALIDATOR_PROVIDER_SUMMARY };
     }
+    const headRaw = await input.loadFile(directFile, "head");
     return fromProvider(assessProvider(safeParseJson(headRaw), input.opts));
   }
-  const baseRaw = await input.loadFile(directFile, "base");
+  // A companion provider file with no configured validator can never be judged, whatever the entry itself turns
+  // out to be — hold before paying for the entry-side fetch + diff + per-entry assessment pipeline below.
+  if (companionProviderFile !== null && !spec.assessProviderEntry) {
+    return { verdict: "manual", summary: NO_VALIDATOR_PROVIDER_SUMMARY };
+  }
+  // The entry's head/base fetch and the companion provider's head/base fetch (when present) are up to four
+  // independent GitHub-Contents reads with no data dependency on each other — resolve them concurrently rather
+  // than paying for sequential round-trips.
+  const [headRaw, baseRaw, providerHeadRaw, providerBaseRaw] = await Promise.all([
+    input.loadFile(directFile, "head"),
+    input.loadFile(directFile, "base"),
+    companionProviderFile !== null ? input.loadFile(companionProviderFile, "head") : Promise.resolve(null),
+    companionProviderFile !== null ? input.loadFile(companionProviderFile, "base") : Promise.resolve(null),
+  ]);
+  // A companion recognized by path alone (see classifyRegistryPrScope) is only a genuine DEBUT provider when it's
+  // absent at base — the same "null base ⇒ brand-new file" convention diffAppendedSurfaceEntries already applies
+  // to the entry file itself. A non-null base means this PR is editing an existing, already-registered provider
+  // record alongside an unrelated entry — a materially different, more sensitive shape that needs a human, not
+  // the automatic debut-provider merge/close flow below.
+  if (companionProviderFile !== null && providerBaseRaw !== null) {
+    return { verdict: "manual", summary: NON_DEBUT_COMPANION_SUMMARY };
+  }
   const appendedEntries = diffAppendedSurfaceEntries(headRaw, baseRaw, spec.collectionField);
   const maxAppendedEntries = spec.maxAppendedEntries ?? DEFAULT_MAX_APPENDED_ENTRIES;
   if (appendedEntries === null || appendedEntries.length === 0 || appendedEntries.length > maxAppendedEntries) {
@@ -179,5 +246,10 @@ export async function runSurfaceReview(spec: RegistryLaneSpec, input: SurfaceRev
   const assessment = pickAggregateAssessment(
     appendedEntries.map((appendedEntry) => assessEntry(headDoc, { ...input.opts, appendedEntry })),
   );
+  if (companionProviderFile !== null) {
+    // Guaranteed non-null: the no-validator short-circuit above already returned when this spec lacks one.
+    const assessProvider = spec.assessProviderEntry as NonNullable<RegistryLaneSpec["assessProviderEntry"]>;
+    return assessEntryWithProviderCompanion(assessProvider, assessment, providerHeadRaw, input.opts);
+  }
   return { verdict: toCoreVerdict(assessment.verdict), summary: assessment.summary, reason: assessment.reason };
 }
