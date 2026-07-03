@@ -7001,6 +7001,7 @@ describe("queue processors", () => {
       if (url.includes("/pulls/55/files")) return Response.json([{ filename: "src/a.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@\n+const ok = true;" }]);
       if (url.includes("/pulls/55/reviews")) return Response.json([]);
       if (url.includes("/pulls/55/commits")) return Response.json([]);
+      if ((url.endsWith("/pulls/53") || url.endsWith("/pulls/54")) && method === "GET") return Response.json({ state: "open" });
       if (url.endsWith("/pulls/55") && method === "PATCH") { seen.closed = JSON.parse(String(init?.body ?? "{}")).state === "closed"; return Response.json({ number: 55, state: "closed" }); }
       if (url.endsWith("/pulls/55")) return Response.json({ number: 55, state: "open", user: { login: "baduser" }, head: { sha: "bl55" }, mergeable_state: "clean" });
       if (url.includes("/commits/bl55/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
@@ -7721,6 +7722,7 @@ describe("queue processors", () => {
       if (url.includes("/pulls/55/files")) return Response.json([{ filename: "src/a.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@\n+const ok = true;" }]);
       if (url.includes("/pulls/55/reviews")) return Response.json([]);
       if (url.includes("/pulls/55/commits")) return Response.json([]);
+      if ((url.endsWith("/pulls/53") || url.endsWith("/pulls/54")) && method === "GET") return Response.json({ state: "open" });
       if (url.endsWith("/pulls/55") && method === "PATCH") { seen.closed = JSON.parse(String(init?.body ?? "{}")).state === "closed"; return Response.json({ number: 55, state: "closed" }); }
       if (url.endsWith("/pulls/55")) return Response.json({ number: 55, state: "open", user: { login: "farmer99" }, head: { sha: "f55" }, mergeable_state: "clean" });
       if (url.includes("/commits/f55/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
@@ -7828,6 +7830,9 @@ describe("queue processors", () => {
       if (url.includes("/pulls/55/commits")) return Response.json([]);
       if (url.endsWith("/pulls/55") && method === "PATCH") { seen.closed = JSON.parse(String(init?.body ?? "{}")).state === "closed"; return Response.json({ number: 55, state: "closed" }); }
       if (url.endsWith("/pulls/55")) return Response.json({ number: 55, state: "open", user: { login: "farmer99" }, head: { sha: "f55" }, mergeable_state: "clean" });
+      // The other-siblings live-state recheck (#2270 complete-set fix) confirms every counted sibling PR is
+      // still open before trusting it toward the cap — farmer99's two pre-existing PRs (53, 54) must report open.
+      if (url.endsWith("/pulls/53") || url.endsWith("/pulls/54")) return Response.json({ number: 53, state: "open" });
       if (url.includes("/commits/f55/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
       if (url.includes("/commits/f55/status")) return Response.json({ state: "success", statuses: [] });
       if (url.includes("/issues/55/labels")) return Response.json([]);
@@ -8182,6 +8187,127 @@ describe("queue processors", () => {
     expect(seen.cancelledIds).toEqual([]);
   });
 
+  it("contributor open-PR cap (#2270): uses a complete author-scoped set beyond the duplicate-analysis 100-row sample (regression)", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await upsertInstallation(env, {
+      installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" }, target_type: "User", repository_selection: "all", permissions: { metadata: "read", pull_requests: "write", issues: "write" }, events: ["pull_request"] },
+      repositories: [{ name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }],
+    });
+    for (let number = 1; number <= 100; number += 1) {
+      await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number, title: `Busy repo PR ${number}`, state: "open", user: { login: `other-${number}` }, head: { sha: `o${number}` }, labels: [], body: "x" });
+    }
+    await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number: 101, title: "Spammer PR one", state: "open", user: { login: "spammer" }, head: { sha: "s101" }, labels: [], body: "x" });
+    await upsertRepositorySettings(env, {
+      repoFullName: "JSONbored/gittensory",
+      commentMode: "all_prs",
+      publicSurface: "comment_only",
+      checkRunMode: "off",
+      gateCheckMode: "enabled",
+      aiReviewMode: "advisory",
+      autonomy: { close: "auto", label: "auto" },
+      contributorOpenPrCap: 1,
+    });
+    const seen = { closed: false, comments: [] as string[] };
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url === "https://api.gittensor.io/miners") return Response.json([]);
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.endsWith("/pulls/101") && method === "GET") return Response.json({ number: 101, state: "open" });
+      if (url.includes("/pulls/102/files")) return Response.json([{ filename: "src/a.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@\n+const ok = true;" }]);
+      if (url.includes("/pulls/102/reviews")) return Response.json([]);
+      if (url.includes("/pulls/102/commits")) return Response.json([]);
+      if (url.endsWith("/pulls/102") && method === "PATCH") { seen.closed = JSON.parse(String(init?.body ?? "{}")).state === "closed"; return Response.json({ number: 102, state: "closed" }); }
+      if (url.endsWith("/pulls/102")) return Response.json({ number: 102, state: "open", user: { login: "spammer" }, head: { sha: "s102" }, mergeable_state: "clean" });
+      if (url.includes("/commits/s102/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
+      if (url.includes("/commits/s102/status")) return Response.json({ state: "success", statuses: [] });
+      if (url.includes("/issues/102/labels")) return Response.json([]);
+      if (url.includes("/issues/102/comments") && method === "POST") { seen.comments.push(String(JSON.parse(String(init?.body ?? "{}")).body ?? "")); return Response.json({ id: 1 }, { status: 201 }); }
+      if (url.includes("/issues/102/comments")) return Response.json([]);
+      return Response.json({});
+    });
+
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "contributor-cap-busy-repo",
+      eventName: "pull_request",
+      payload: {
+        action: "opened",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        pull_request: { number: 102, title: "Spammer PR two", state: "open", user: { login: "spammer" }, head: { sha: "s102" }, labels: [], body: "x", mergeable_state: "clean", reviewDecision: "APPROVED" },
+      },
+    });
+
+    expect(seen.closed).toBe(true);
+    expect(seen.comments.some((c) => c.includes("@spammer") && c.includes("2 open pull requests") && c.includes("limit of 1"))).toBe(true);
+  });
+
+  it("REGRESSION (security review finding): the per-repo cap's sibling live-check bounds concurrency instead of firing one request per open PR at once", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await upsertInstallation(env, {
+      installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" }, target_type: "User", repository_selection: "all", permissions: { metadata: "read", pull_requests: "write", issues: "write" }, events: ["pull_request"] },
+      repositories: [{ name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }],
+    });
+    // 30 OTHER open PRs from the SAME author — well beyond CONTRIBUTOR_CAP_LIVE_CHECK_CONCURRENCY (10), so an
+    // unbounded Promise.all would fire all 30 live-state GETs at once.
+    const SIBLING_COUNT = 30;
+    for (let number = 1; number <= SIBLING_COUNT; number += 1) {
+      await upsertPullRequestFromGitHub(env, "JSONbored/gittensory", { number, title: `Prolific PR ${number}`, state: "open", user: { login: "prolific" }, head: { sha: `p${number}` }, labels: [], body: "x" });
+    }
+    await upsertRepositorySettings(env, {
+      repoFullName: "JSONbored/gittensory",
+      commentMode: "off",
+      publicSurface: "off",
+      checkRunMode: "off",
+      gateCheckMode: "enabled",
+      autonomy: { close: "auto", label: "auto" },
+      contributorOpenPrCap: 100, // above SIBLING_COUNT + 1 — this test only cares about concurrency, not closing.
+    });
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const siblingCheckPattern = new RegExp(`/pulls/(?:${Array.from({ length: SIBLING_COUNT }, (_, i) => i + 1).join("|")})$`);
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      const method = init?.method ?? "GET";
+      if (url === "https://api.gittensor.io/miners") return Response.json([]);
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (siblingCheckPattern.test(url) && method === "GET") {
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        // A tiny real delay forces genuine overlap between concurrently-dispatched sibling checks — without
+        // it, each mock resolves synchronously and never actually overlaps another in-flight call.
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        inFlight -= 1;
+        return Response.json({ state: "open" });
+      }
+      if (url.includes(`/pulls/${SIBLING_COUNT + 1}/files`)) return Response.json([{ filename: "src/a.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@\n+const ok = true;" }]);
+      if (url.includes(`/pulls/${SIBLING_COUNT + 1}/reviews`)) return Response.json([]);
+      if (url.includes(`/pulls/${SIBLING_COUNT + 1}/commits`)) return Response.json([]);
+      if (url.endsWith(`/pulls/${SIBLING_COUNT + 1}`)) return Response.json({ number: SIBLING_COUNT + 1, state: "open", user: { login: "prolific" }, head: { sha: `p${SIBLING_COUNT + 1}` }, mergeable_state: "clean" });
+      if (url.includes(`/commits/p${SIBLING_COUNT + 1}/check-runs`)) return Response.json({ total_count: 0, check_runs: [] });
+      if (url.includes(`/commits/p${SIBLING_COUNT + 1}/status`)) return Response.json({ state: "success", statuses: [] });
+      if (url.includes(`/issues/${SIBLING_COUNT + 1}/labels`)) return Response.json([]);
+      if (url.includes(`/issues/${SIBLING_COUNT + 1}/comments`)) return Response.json([]);
+      return Response.json({});
+    });
+
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "contributor-cap-bounded-concurrency",
+      eventName: "pull_request",
+      payload: {
+        action: "opened",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        pull_request: { number: SIBLING_COUNT + 1, title: "Prolific author's newest PR", state: "open", user: { login: "prolific" }, head: { sha: `p${SIBLING_COUNT + 1}` }, labels: [], body: "x", mergeable_state: "clean" },
+      },
+    });
+
+    expect(maxInFlight).toBeGreaterThan(1); // proves the check is genuinely concurrent, not accidentally serial
+    expect(maxInFlight).toBeLessThanOrEqual(10); // CONTRIBUTOR_CAP_LIVE_CHECK_CONCURRENCY
+  });
+
   it("contributor open-PR cap (#2270): disabled (no cap configured, the default) never closes an over-threshold contributor", async () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
     await upsertInstallation(env, {
@@ -8209,6 +8335,7 @@ describe("queue processors", () => {
       if (url.includes("/pulls/55/files")) return Response.json([{ filename: "src/a.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@\n+const ok = true;" }]);
       if (url.includes("/pulls/55/reviews")) return Response.json([]);
       if (url.includes("/pulls/55/commits")) return Response.json([]);
+      if ((url.endsWith("/pulls/53") || url.endsWith("/pulls/54")) && method === "GET") return Response.json({ state: "open" });
       if (url.endsWith("/pulls/55") && method === "PATCH") { seen.closed = JSON.parse(String(init?.body ?? "{}")).state === "closed"; return Response.json({ number: 55, state: "closed" }); }
       if (url.endsWith("/pulls/55")) return Response.json({ number: 55, state: "open", user: { login: "farmer99" }, head: { sha: "f55" }, mergeable_state: "clean" });
       if (url.includes("/commits/f55/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
@@ -8264,6 +8391,7 @@ describe("queue processors", () => {
       if (url.includes("/pulls/55/files")) return Response.json([{ filename: "src/a.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@\n+const ok = true;" }]);
       if (url.includes("/pulls/55/reviews")) return Response.json([]);
       if (url.includes("/pulls/55/commits")) return Response.json([]);
+      if ((url.endsWith("/pulls/53") || url.endsWith("/pulls/54")) && method === "GET") return Response.json({ state: "open" });
       if (url.endsWith("/pulls/55") && method === "PATCH") { seen.closed = JSON.parse(String(init?.body ?? "{}")).state === "closed"; return Response.json({ number: 55, state: "closed" }); }
       if (url.endsWith("/pulls/55")) return Response.json({ number: 55, state: "open", user: { login: "farmer99" }, head: { sha: "f55" }, mergeable_state: "clean" });
       if (url.includes("/commits/f55/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
@@ -8331,6 +8459,7 @@ describe("queue processors", () => {
       if (url.includes("/pulls/55/files")) return Response.json([{ filename: "src/a.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@\n+const ok = true;" }]);
       if (url.includes("/pulls/55/reviews")) return Response.json([]);
       if (url.includes("/pulls/55/commits")) return Response.json([]);
+      if ((url.endsWith("/pulls/53") || url.endsWith("/pulls/54")) && method === "GET") return Response.json({ state: "open" });
       if (url.endsWith("/pulls/55") && method === "PATCH") { seen.closed = JSON.parse(String(init?.body ?? "{}")).state === "closed"; return Response.json({ number: 55, state: "closed" }); }
       if (url.endsWith("/pulls/55")) return Response.json({ number: 55, state: "open", user: { login: "farmer99" }, head: { sha: "f55" }, mergeable_state: "clean" });
       // Install-wide live-verify (#2562 gate-review follow-up) re-fetches every OTHER counted sibling before
@@ -8453,6 +8582,7 @@ describe("queue processors", () => {
       if (url.includes("/pulls/55/files")) return Response.json([{ filename: "src/a.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@\n+const ok = true;" }]);
       if (url.includes("/pulls/55/reviews")) return Response.json([]);
       if (url.includes("/pulls/55/commits")) return Response.json([]);
+      if ((url.endsWith("/pulls/53") || url.endsWith("/pulls/54")) && method === "GET") return Response.json({ state: "open" });
       if (url.endsWith("/pulls/55") && method === "PATCH") { seen.closed = JSON.parse(String(init?.body ?? "{}")).state === "closed"; return Response.json({ number: 55, state: "closed" }); }
       if (url.endsWith("/pulls/55")) return Response.json({ number: 55, state: "open", user: { login: "farmer99" }, head: { sha: "f55" }, mergeable_state: "clean" });
       if (url.includes("/commits/f55/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
@@ -8511,6 +8641,7 @@ describe("queue processors", () => {
       if (url.includes("/pulls/55/files")) return Response.json([{ filename: "src/a.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@\n+const ok = true;" }]);
       if (url.includes("/pulls/55/reviews")) return Response.json([]);
       if (url.includes("/pulls/55/commits")) return Response.json([]);
+      if ((url.endsWith("/pulls/53") || url.endsWith("/pulls/54")) && method === "GET") return Response.json({ state: "open" });
       if (url.endsWith("/pulls/55") && method === "PATCH") { seen.closed = JSON.parse(String(init?.body ?? "{}")).state === "closed"; return Response.json({ number: 55, state: "closed" }); }
       if (url.endsWith("/pulls/55")) return Response.json({ number: 55, state: "open", user: { login: "farmer99" }, head: { sha: "f55" }, mergeable_state: "clean" });
       if (url.includes("/commits/f55/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
@@ -8570,6 +8701,7 @@ describe("queue processors", () => {
       if (url.includes("/pulls/55/files")) return Response.json([{ filename: "src/a.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@\n+const ok = true;" }]);
       if (url.includes("/pulls/55/reviews")) return Response.json([]);
       if (url.includes("/pulls/55/commits")) return Response.json([]);
+      if ((url.endsWith("/pulls/53") || url.endsWith("/pulls/54")) && method === "GET") return Response.json({ state: "open" });
       if (url.endsWith("/pulls/55") && method === "PATCH") { seen.closed = JSON.parse(String(init?.body ?? "{}")).state === "closed"; return Response.json({ number: 55, state: "closed" }); }
       if (url.endsWith("/pulls/55")) return Response.json({ number: 55, state: "open", user: { login: "farmer99" }, head: { sha: "f55" }, mergeable_state: "clean" });
       if (url.includes("/commits/f55/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
@@ -8681,6 +8813,7 @@ describe("queue processors", () => {
       if (url.includes("/pulls/55/files")) return Response.json([{ filename: "src/a.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@\n+const ok = true;" }]);
       if (url.includes("/pulls/55/reviews")) return Response.json([]);
       if (url.includes("/pulls/55/commits")) return Response.json([]);
+      if ((url.endsWith("/pulls/53") || url.endsWith("/pulls/54")) && method === "GET") return Response.json({ state: "open" });
       if (url.endsWith("/pulls/55") && method === "PATCH") { seen.closed = JSON.parse(String(init?.body ?? "{}")).state === "closed"; return Response.json({ number: 55, state: "closed" }); }
       if (url.endsWith("/pulls/55")) return Response.json({ number: 55, state: "open", user: { login: "farmer99" }, head: { sha: "f55" }, mergeable_state: "clean" });
       if (url.includes("/commits/f55/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
@@ -8720,6 +8853,9 @@ describe("queue processors", () => {
       if (url.includes(`/pulls/${prNumber}/commits`)) return Response.json([]);
       if (url.endsWith(`/pulls/${prNumber}`) && method === "PATCH") { seen.closed = JSON.parse(String(init?.body ?? "{}")).state === "closed"; return Response.json({ number: prNumber, state: "closed" }); }
       if (url.endsWith(`/pulls/${prNumber}`)) return Response.json({ number: prNumber, state: "open", user: { login: "newbie" }, head: { sha: `s${prNumber}` }, mergeable_state: "clean" });
+      // The other-siblings live-state recheck (#2270 complete-set fix) confirms every counted sibling PR is
+      // still open before trusting it toward the cap — a generic catch-all covers any of newbie's other
+      // pre-existing PR numbers without hard-coding specific ones.
       if (/\/pulls\/\d+$/.test(url)) return Response.json({ state: "open" });
       if (url.includes(`/commits/s${prNumber}/check-runs`)) return Response.json({ total_count: 0, check_runs: [] });
       if (url.includes(`/commits/s${prNumber}/status`)) return Response.json({ state: "success", statuses: [] });
@@ -9061,7 +9197,7 @@ describe("queue processors", () => {
       const method = init?.method ?? "GET";
       if (url === "https://api.gittensor.io/miners") return Response.json([]);
       if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
-      for (const [n, sha] of [[55, "f55"], [56, "f56"]] as const) {
+      for (const [n, sha] of [[54, "f54"], [55, "f55"], [56, "f56"]] as const) {
         if (url.includes(`/pulls/${n}/files`)) return Response.json([{ filename: "src/a.ts", status: "modified", additions: 1, deletions: 0, changes: 1, patch: "@@\n+const ok = true;" }]);
         if (url.includes(`/pulls/${n}/reviews`)) return Response.json([]);
         if (url.includes(`/pulls/${n}/commits`)) return Response.json([]);
