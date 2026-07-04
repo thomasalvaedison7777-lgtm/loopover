@@ -84,6 +84,11 @@ function validatePlanDag(plan) {
     if (seenStepIds.has(step.id)) throw new Error("invalid_plan");
     seenStepIds.add(step.id);
   }
+  for (const step of plan.steps) {
+    for (const dep of step.dependsOn) {
+      if (dep === step.id || !seenStepIds.has(dep)) throw new Error("invalid_plan");
+    }
+  }
   return plan;
 }
 

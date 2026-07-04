@@ -98,6 +98,21 @@ describe("gittensory-miner plan store (#2318)", () => {
     ).toThrow("invalid_plan");
   });
 
+  it("rejects unknown or self-referential dependsOn entries on save", () => {
+    const store = tempStore();
+    const pendingStep = { id: "a", title: "A", dependsOn: [] as string[], status: "pending" as const, attempts: 0, maxAttempts: 1 };
+    expect(() =>
+      store.savePlan("missing-dep", {
+        steps: [{ ...pendingStep, dependsOn: ["ghost"] }],
+      }),
+    ).toThrow("invalid_plan");
+    expect(() =>
+      store.savePlan("self-dep", {
+        steps: [{ ...pendingStep, dependsOn: ["a"] }],
+      }),
+    ).toThrow("invalid_plan");
+  });
+
   it("rejects a corrupted plan blob on load instead of returning a malformed plan", () => {
     const store = tempStore();
     store.savePlan("p1", PLAN);
