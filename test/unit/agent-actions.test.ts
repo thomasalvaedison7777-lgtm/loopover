@@ -490,6 +490,151 @@ describe("planAgentMaintenanceActions (#778)", () => {
     });
   });
 
+  describe("unlinked-issue-match hold (#unlinked-issue-guardrail, credibility-gate-farming defense)", () => {
+    const matched = { unlinkedIssueMatchHold: { reason: "this PR links no issue, but appears to directly solve open issue #42 without linking it (adds the missing dedup key)", comment: "This PR doesn't link an issue, but its diff appears to directly solve #42. Please add a linking reference." } };
+
+    it("does NOT auto-merge a clean+approved+passing PR when a confirmed unlinked-issue match is found", () => {
+      const plan = classes(planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { merge: "auto" }, ...matched, pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED" } })));
+      expect(plan).not.toContain("merge");
+    });
+
+    it("labels the PR manual-review (the generic label — there is no dedicated one) with the match reason", () => {
+      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { review_state_label: "auto", merge: "auto" }, ...matched, pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED" } }));
+      const label = plan.find((a) => a.actionClass === "label");
+      expect(label?.label).toBe(AGENT_LABEL_NEEDS_REVIEW);
+      expect(label?.reason).toContain("open issue #42");
+      expect(classes(plan)).not.toContain("merge");
+    });
+
+    it("attaches the linking-reference comment to the manual-review label action", () => {
+      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { review_state_label: "auto" }, ...matched, pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED" } }));
+      const label = plan.find((a) => a.actionClass === "label");
+      expect(label?.comment).toContain("directly solve #42");
+    });
+
+    it("falls back to manual-review (+ the comment) when review_state_label is OFF", () => {
+      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { merge: "auto" }, ...matched, pr: { labels: [], mergeableState: "clean" } }));
+      expect(plan).toEqual([expect.objectContaining({ actionClass: "label", autonomyClass: "merge", label: AGENT_LABEL_NEEDS_REVIEW, labelOp: "add", comment: matched.unlinkedIssueMatchHold.comment })]);
+    });
+
+    it("does not duplicate manual-review when review_state_label IS also acting (only one label action)", () => {
+      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { merge: "auto", review_state_label: "auto" }, ...matched, pr: { labels: [], mergeableState: "clean" } }));
+      expect(plan.filter((a) => a.actionClass === "label")).toHaveLength(1);
+    });
+
+    it("does not re-plan the manual-review label when the PR already carries it (idempotent)", () => {
+      const plan = classes(planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { review_state_label: "auto" }, ...matched, pr: { labels: [AGENT_LABEL_NEEDS_REVIEW] } })));
+      expect(plan).not.toContain("label");
+    });
+
+    it("an explicit null manualReviewLabel disables the fallback (respects the operator's own opt-out)", () => {
+      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { merge: "auto" }, manualReviewLabel: null, ...matched, pr: { labels: [], mergeableState: "clean" } }));
+      expect(plan).toEqual([]);
+    });
+
+    it("a BLOCKING PR keeps the changes-requested label even with a confirmed match present (blocker wins, no comment)", () => {
+      const label = planAgentMaintenanceActions(input({ conclusion: "failure", autonomy: { review_state_label: "auto" }, blockerTitles: ["x"], ...matched, pr: { labels: [] } })).find((a) => a.actionClass === "label");
+      expect(label?.label).toBe(AGENT_LABEL_CHANGES);
+      expect(label?.comment).toBeUndefined();
+    });
+
+    it("a live migration collision takes priority over an unlinked-issue-match hold when both are true simultaneously", () => {
+      const plan = planAgentMaintenanceActions(input({
+        conclusion: "success",
+        autonomy: { review_state_label: "auto" },
+        migrationCollisionHold: { reason: "live migrations/** collision on main", comment: "Please rebase." },
+        ...matched,
+        pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED" },
+      }));
+      const label = plan.find((a) => a.actionClass === "label");
+      expect(label?.label).toBe(AGENT_LABEL_MIGRATION_COLLISION);
+      expect(label?.comment).toBe("Please rebase.");
+    });
+
+    it("still auto-merges when no unlinked-issue-match hold is present (absent input, byte-identical to today)", () => {
+      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { review_state_label: "auto", merge: "auto" }, pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED" } }));
+      expect(classes(plan)).toContain("merge");
+      expect(plan.find((a) => a.actionClass === "label")?.label).toBe(AGENT_LABEL_READY);
+    });
+  });
+
+  describe("unlinked-issue-match CLOSE — confirmed repeat by the same contributor (#unlinked-issue-guardrail-followup)", () => {
+    const repeated = { unlinkedIssueMatchClose: { reason: "this PR appears to directly solve open issue #42 without linking it — a repeat of the same unlinked-issue pattern already flagged on an earlier PR from this contributor", comment: "Closing: please link the issue you're solving going forward." } };
+
+    it("closes one-shot even on a green, clean, approved PR — takes precedence over merge, and pins expectedHeadSha", () => {
+      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { merge: "auto", close: "auto" }, ...repeated, pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED", headSha: "abc123" } }));
+      expect(classes(plan)).toContain("close");
+      expect(classes(plan)).not.toContain("merge");
+      expect(plan.find((a) => a.actionClass === "close")?.expectedHeadSha).toBe("abc123");
+    });
+
+    it("cites the repeat-specific reason and the standard close message template, tagged closeKind: heuristic (subject to the precision breaker)", () => {
+      const action = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { close: "auto" }, ...repeated, pr: { labels: [] } })).find((a) => a.actionClass === "close");
+      expect(action?.reason).toContain("#42");
+      expect(action?.reason).toContain("repeat");
+      expect(action?.closeKind).toBe("heuristic");
+      expect(action?.closeConcreteEvidence).not.toBe(true);
+      expect(action?.closeComment).toContain("Gittensory is closing this pull request");
+      expect(action?.closeComment).toContain("#42");
+    });
+
+    it("does not close when the close autonomy class is not acting (deny-by-default floor)", () => {
+      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: {}, ...repeated, pr: { labels: [] } }));
+      expect(plan).toEqual([]);
+    });
+
+    it("HOLDS (never silently merges) a confirmed repeat when merge is auto but close autonomy is not acting (gate-review finding)", () => {
+      // Before the fix: heldForManualReview ignored unlinkedIssueMatchClose entirely, so with close autonomy
+      // not configured, an otherwise clean/green/approved PR would silently MERGE straight past a confirmed
+      // repeat offender -- worse than doing nothing.
+      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { merge: "auto" }, ...repeated, pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED" } }));
+      expect(classes(plan)).not.toContain("merge");
+      expect(classes(plan)).not.toContain("close");
+      const label = plan.find((a) => a.actionClass === "label");
+      expect(label?.label).toBe(AGENT_LABEL_NEEDS_REVIEW);
+      expect(label?.reason).toContain("#42");
+      expect(label?.comment).toContain("Closing:");
+    });
+
+    it("still holds (not merges) the fallback case when review_state_label is ALSO acting, without duplicating the label", () => {
+      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { merge: "auto", review_state_label: "auto" }, ...repeated, pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED" } }));
+      expect(classes(plan)).not.toContain("merge");
+      expect(plan.filter((a) => a.actionClass === "label")).toHaveLength(1);
+      const label = plan.find((a) => a.actionClass === "label");
+      expect(label?.label).toBe(AGENT_LABEL_NEEDS_REVIEW);
+      expect(label?.reason).toContain("#42");
+      expect(label?.comment).toContain("Closing:");
+    });
+
+    it("an explicit null manualReviewLabel disables the fallback hold-label (respects the operator's own opt-out) -- the PR still never merges", () => {
+      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { merge: "auto" }, manualReviewLabel: null, ...repeated, pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED" } }));
+      expect(plan).toEqual([]);
+    });
+
+    it("does not close an owner-authored PR (owner exemption applies the same as every other close path)", () => {
+      const plan = classes(planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { close: "auto" }, ...repeated, authorIsOwner: true, pr: { labels: [] } })));
+      expect(plan).not.toContain("close");
+    });
+
+    it("takes precedence over a linked-issue hard-rule violation's own close reason when both are somehow true (linked-issue-hard-rule wins, per the existing disposition order)", () => {
+      // Documents the existing precedence, not a new requirement: willCloseForLinkedIssue is checked BEFORE
+      // unlinkedIssueMatchViolated in the disposition chain, so a deterministic hard-rule close still wins.
+      const plan = planAgentMaintenanceActions(input({
+        conclusion: "success",
+        autonomy: { close: "auto" },
+        linkedIssueHardRule: { violated: true, reason: "Linked issue #1 is assigned to the maintainer." },
+        ...repeated,
+        pr: { labels: [] },
+      })).find((a) => a.actionClass === "close");
+      expect(plan?.closeKind).toBe("linked-issue-hard-rule");
+    });
+
+    it("still auto-merges when no unlinked-issue-match close is present (absent input, byte-identical to today)", () => {
+      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { merge: "auto" }, pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED" } }));
+      expect(classes(plan)).toContain("merge");
+    });
+  });
+
   describe("submission volume is NOT a manual-hold reason — only guardrail paths hold (#minimize-manual)", () => {
     it("a high-volume author's clean+green+approved PR MERGES (the quality gate, not a submission count, is the defense)", () => {
       const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { merge: "auto", approve: "auto", close: "auto", review_state_label: "auto" }, pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED" } }));
@@ -906,6 +1051,13 @@ describe("planAgentMaintenanceActions (#778)", () => {
       expect(cls).not.toContain("approve");
       // labeled changes-requested, not ready-to-merge
       expect(plan.find((a) => a.actionClass === "label")?.label).toBe(AGENT_LABEL_CHANGES);
+    });
+
+    it("falls back to a generic reason when the hard-rule violation carries no reason string", () => {
+      const plan = planAgentMaintenanceActions(input({ conclusion: "success", autonomy: { close: "auto", review_state_label: "auto" }, ciState: "passed", linkedIssueHardRule: { violated: true, reason: null }, pr: { labels: [], mergeableState: "clean", reviewDecision: "APPROVED" } }));
+      const label = plan.find((a) => a.actionClass === "label");
+      expect(label?.label).toBe(AGENT_LABEL_CHANGES);
+      expect(label?.reason).toContain("linked-issue hard rule: ineligible linked issue");
     });
   });
 

@@ -307,6 +307,21 @@ export type AgentActionPlanInput = {
   // emitted migration-collision label so the contributor knows why. Never causes a CLOSE — only
   // ever downgrades a would-merge into a held-for-review state, same risk profile as the guardrail hold.
   migrationCollisionHold?: { reason: string; comment: string } | undefined;
+  // Unlinked-issue guardrail (#unlinked-issue-guardrail, credibility-gate-farming defense). The trigger
+  // (runAgentMaintenancePlanAndExecute) has already run the deterministic pre-filter + AI verification for a
+  // PR that links NO issue -- this input is already the resolved "yes, hold this merge" verdict (or absent,
+  // meaning no confirmed direct match was found). Same risk profile as migrationCollisionHold: SUPPRESSES
+  // the merge (folded into `heldForManualReview`), never causes a CLOSE, and is the rare exception to "a
+  // missing linked issue is never a close reason" -- it only ever downgrades a would-merge into a held-for-
+  // review state so a human can confirm the match before it's credited.
+  unlinkedIssueMatchHold?: { reason: string; comment: string } | undefined;
+  // Same guardrail as unlinkedIssueMatchHold, but for a CONFIRMED REPEAT by the same contributor (tracked via
+  // audit_events, see resolveUnlinkedIssueMatchDisposition) -- a second occurrence is no longer a coincidence
+  // worth a human's benefit of the doubt, so this closes the PR one-shot instead of holding it. Deliberately
+  // NOT `closeConcreteEvidence` (stays subject to the close-precision breaker): the underlying signal is an
+  // AI semantic-match verdict, and a systematically-wrong match must not become breaker-proof just because
+  // it repeated. Mutually exclusive with unlinkedIssueMatchHold -- the resolver only ever returns one.
+  unlinkedIssueMatchClose?: { reason: string; comment: string } | undefined;
   pr: {
     mergeableState?: string | null | undefined;
     reviewDecision?: string | null | undefined;
@@ -669,7 +684,19 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
   // is held separately, via the owner close-exemption below — never auto-closed.) Submission volume is NOT a
   // hold reason: a high-volume author's clean PR still merges and their bad PR still closes — the quality
   // gate, not a submission count, is the defense (anti-farming-by-manual-hold removed).
-  const heldForManualReview = guardrailHit || input.migrationCollisionHold !== undefined;
+  //
+  // A confirmed repeat unlinked-issue-match (unlinkedIssueMatchClose) is ALSO folded in here, but only when
+  // `close` autonomy is NOT acting (gate-review finding): without this, a repo running `merge: auto` with
+  // `close` unset/observe would see `unlinkedIssueMatchViolated` below evaluate false (it requires
+  // `acting("close")`), and — since nothing else accounts for the confirmed repeat — an otherwise-green PR
+  // would silently MERGE straight through the escalation instead of being held. When `close` IS acting, the
+  // dedicated close branch below handles it and this term is redundant (harmless: both paths agree the PR
+  // must not silently merge).
+  const heldForManualReview =
+    guardrailHit ||
+    input.migrationCollisionHold !== undefined ||
+    input.unlinkedIssueMatchHold !== undefined ||
+    (input.unlinkedIssueMatchClose !== undefined && !acting("close"));
   const labels = resolveAgentDispositionLabels(input);
   // Canonical (reviewbot non-content-gate) policy, tuned to the operator's minimize-manual goal: merge-or-close
   // with high accuracy; manual review is the RARE exception. A PR is "review-good" when the gate passes AND CI is
@@ -695,6 +722,12 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
   // blockers/conflicts/red CI; they hold only otherwise-ready PRs for manual review.
   // (Rebase-if-behind already ran above, so a red CI here is on the latest base — not a stale-base artifact.) (#ci-fail-closes-guarded)
   const willClose = closeEligible && acting("close") && (ciFailed || conclusion === "failure" || isConflict);
+  // Unlinked-issue-match REPEAT close (#unlinked-issue-guardrail-followup): a CONFIRMED repeat of the
+  // credibility-gate-farming pattern (tracked via audit_events in resolveUnlinkedIssueMatchDisposition) — not
+  // an immediate close on the first occurrence (that stays a hold, unlinkedIssueMatchHold), only once the same
+  // contributor has done it before. Takes PRECEDENCE over merge below, same reasoning as the linked-issue
+  // hard-rule close: a confirmed repeat offender must never auto-merge just because CI happens to be green.
+  const unlinkedIssueMatchViolated = input.unlinkedIssueMatchClose !== undefined && closeEligible && acting("close");
   // Linked-issue HARD-RULE close (#linked-issue-hard-rules). A DETERMINISTIC verdict about the LINKED ISSUE
   // (owner-assigned / missing point-label / maintainer-only) — NOT an AI verdict, so there is no hallucination
   // to guard against: this close fires REGARDLESS of `guardrailHit`. It still only ever closes a CONTRIBUTOR
@@ -770,6 +803,38 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
     });
   }
 
+  // 1d) unlinked-issue-match manual-review fallback (#unlinked-issue-guardrail) — mirrors 1c exactly, for the
+  // credibility-gate-farming guardrail: when review_state_label is OFF, surface the hold + evidence via the
+  // generic manualReviewLabel fallback so a confirmed match isn't silently invisible. Never duplicates 1's or
+  // 1c's label (hasLabelOrPlanned guard) if either already added it first.
+  if (reviewGood && input.unlinkedIssueMatchHold !== undefined && !acting("review_state_label") && labels.manualReview !== null && acting("merge") && !hasLabelOrPlanned(input.pr.labels, actions, labels.manualReview)) {
+    actions.push({
+      actionClass: "label",
+      autonomyClass: "merge",
+      requiresApproval: false,
+      reason: `verdict=${conclusion}; ${input.unlinkedIssueMatchHold.reason}`,
+      label: labels.manualReview,
+      labelOp: "add",
+      comment: sanitizePublicComment(input.unlinkedIssueMatchHold.comment),
+    });
+  }
+
+  // 1e) unlinked-issue-match REPEAT manual-review fallback when `close` autonomy can't act (gate-review
+  // finding): mirrors 1d, but for the escalated-repeat case folded into `heldForManualReview` above only
+  // when close isn't acting — without this, a confirmed repeat would silently MERGE with no visible signal
+  // at all (the dedicated close branch below never fires without `acting("close")`).
+  if (reviewGood && input.unlinkedIssueMatchClose !== undefined && !acting("close") && !acting("review_state_label") && labels.manualReview !== null && acting("merge") && !hasLabelOrPlanned(input.pr.labels, actions, labels.manualReview)) {
+    actions.push({
+      actionClass: "label",
+      autonomyClass: "merge",
+      requiresApproval: false,
+      reason: `verdict=${conclusion}; ${input.unlinkedIssueMatchClose.reason}`,
+      label: labels.manualReview,
+      labelOp: "add",
+      comment: sanitizePublicComment(input.unlinkedIssueMatchClose.comment),
+    });
+  }
+
   // 2) review_state_label (#label-scoping) — ready-to-merge (review-good, unguarded) / manual-review
   // (review-good but guarded) / changes-requested (not review-good → will be closed for a contributor, held for
   // the owner). A pending linked-issue hard-rule close (flag OR close pass) forces the changes-requested label
@@ -781,16 +846,29 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
     // A live migration-collision hold takes priority over a plain guardrail hold when both are true — it is
     // the more specific, actionable signal (tells the contributor exactly what to do: rebase), and gets its
     // own distinct label (#2550) so an operator can filter/alert on it separately from an ordinary guardrail.
-    const label = linkedIssueCloseInFlight || !reviewGood ? labels.changesRequested : input.migrationCollisionHold !== undefined ? labels.migrationCollision : heldForManualReview ? labels.manualReview : labels.readyToMerge;
+    const label =
+      linkedIssueCloseInFlight || unlinkedIssueMatchViolated || !reviewGood
+        ? labels.changesRequested
+        : input.migrationCollisionHold !== undefined
+          ? labels.migrationCollision
+          : heldForManualReview
+            ? labels.manualReview
+            : labels.readyToMerge;
     const reason = linkedIssueCloseInFlight
       ? `linked-issue hard rule: ${linkedIssueHardRule?.reason ?? "ineligible linked issue"}`
-      : !reviewGood
-        ? `verdict=${conclusion}${ciReason ? `; ${ciReason}` : ""}`
-        : input.migrationCollisionHold !== undefined
-          ? `verdict=${conclusion}; ${input.migrationCollisionHold.reason}`
-          : heldForManualReview
-            ? `verdict=${conclusion}; ${guardrailReason}`
-            : `verdict=${conclusion}; CI green`;
+      : unlinkedIssueMatchViolated
+        ? `verdict=${conclusion}; ${input.unlinkedIssueMatchClose!.reason}`
+        : !reviewGood
+          ? `verdict=${conclusion}${ciReason ? `; ${ciReason}` : ""}`
+          : input.migrationCollisionHold !== undefined
+            ? `verdict=${conclusion}; ${input.migrationCollisionHold.reason}`
+            : input.unlinkedIssueMatchHold !== undefined
+              ? `verdict=${conclusion}; ${input.unlinkedIssueMatchHold.reason}`
+              : input.unlinkedIssueMatchClose !== undefined
+                ? `verdict=${conclusion}; ${input.unlinkedIssueMatchClose.reason}`
+                : heldForManualReview
+                  ? `verdict=${conclusion}; ${guardrailReason}`
+                  : `verdict=${conclusion}; CI green`;
     if (label !== null && !hasLabelOrPlanned(input.pr.labels, actions, label)) {
       actions.push({
         actionClass: "label",
@@ -798,9 +876,18 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
         requiresApproval: approval("review_state_label"),
         reason,
         label,
-        // Only the migration-collision hold carries a comment here — the guardrail/ready/changes labels never
-        // did and still don't (comment stays undefined, matching the pre-#2550 shape exactly).
-        ...(!linkedIssueCloseInFlight && reviewGood && input.migrationCollisionHold !== undefined ? { comment: sanitizePublicComment(input.migrationCollisionHold.comment) } : {}),
+        // Only the migration-collision hold and the unlinked-issue-match hold carry a comment here — the
+        // guardrail/ready/changes labels never did and still don't (comment stays undefined, matching the
+        // pre-#2550 shape exactly). Migration-collision takes priority when both are somehow true (matches
+        // the label-priority choice above). unlinkedIssueMatchViolated is excluded here too: its own CLOSE
+        // action already carries the full closeComment, so this label needs no separate comment.
+        ...(!linkedIssueCloseInFlight && !unlinkedIssueMatchViolated && reviewGood && input.migrationCollisionHold !== undefined
+          ? { comment: sanitizePublicComment(input.migrationCollisionHold.comment) }
+          : !linkedIssueCloseInFlight && !unlinkedIssueMatchViolated && reviewGood && input.unlinkedIssueMatchHold !== undefined
+            ? { comment: sanitizePublicComment(input.unlinkedIssueMatchHold.comment) }
+            : !linkedIssueCloseInFlight && !unlinkedIssueMatchViolated && reviewGood && input.unlinkedIssueMatchClose !== undefined
+              ? { comment: sanitizePublicComment(input.unlinkedIssueMatchClose.comment) }
+              : {}),
       });
     }
     // Flag-then-close double-check, Pass 1: add the pending-closure label + a warning comment citing the specific
@@ -913,6 +1000,25 @@ export function planAgentMaintenanceActions(input: AgentActionPlanInput): Planne
       closeComment: closeMessage([reason]),
       closeKind: "linked-issue-hard-rule",
       // Pin like merge/approve (#2452): lets the accept-time supersede check detect a force-push after staging.
+      ...(input.pr.headSha ? { expectedHeadSha: input.pr.headSha } : {}),
+    });
+  } else if (unlinkedIssueMatchViolated) {
+    // A confirmed REPEAT of the same-account issue-avoidance pattern (#unlinked-issue-guardrail-followup) —
+    // close one-shot, same precedence-over-merge reasoning as the linked-issue hard-rule close above. Tagged
+    // "heuristic" (NOT closeConcreteEvidence): the underlying match is an AI verdict, so a systematically-wrong
+    // match must stay subject to the close-precision breaker even after it repeats.
+    const reason = input.unlinkedIssueMatchClose!.reason;
+    actions.push({
+      actionClass: "close",
+      requiresApproval: approval("close"),
+      reason,
+      closeReasons: [reason],
+      closeComment: closeMessage([reason]),
+      closeKind: "heuristic",
+      // Never CI-driven (#2478 discipline: always explicit, never omitted, on every heuristic close) -- the
+      // executor's live-CI re-check would otherwise treat an omitted value as a legacy row requiring CI to
+      // still be red, wrongly denying this close on a green PR.
+      closeRequiresCiState: "not_required",
       ...(input.pr.headSha ? { expectedHeadSha: input.pr.headSha } : {}),
     });
   } else if (canMerge) {

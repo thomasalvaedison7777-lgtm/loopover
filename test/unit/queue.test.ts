@@ -7077,6 +7077,117 @@ describe("queue processors", () => {
     });
   });
 
+  it("blocks under linkedIssueGateMode:block when the PR only cites an already-CLOSED issue (#unlinked-issue-guardrail-followup — the stale-link gaming case)", async () => {
+    // Before the fix, pr.linkedIssues.length > 0 alone satisfied this gate regardless of the cited issue's real
+    // state — a contributor could cite an already-closed (or fabricated) issue number to fake compliance.
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await persistRegistrySnapshot(
+      env,
+      normalizeRegistryPayload(
+        { "JSONbored/gittensory": { emission_share: 0.01, issue_discovery_share: 0 } },
+        { kind: "raw-github", url: "https://example.test" },
+        "2026-05-23T00:00:00.000Z",
+      ),
+    );
+    await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }, 123);
+    await upsertRepositorySettings(env, {
+      repoFullName: "JSONbored/gittensory",
+      commentMode: "off",
+      publicSurface: "off",
+      autoLabelEnabled: false,
+      checkRunMode: "off",
+      gateCheckMode: "enabled",
+      linkedIssueGateMode: "block",
+      requireLinkedIssue: true,
+    });
+    // .gittensory.yml authoritatively sets the linked-issue blocker to "block" (config-as-code) — mirrors the
+    // existing "publishes an opt-in gate..." test above, which needs the same manifest override for the raw
+    // DB setting to take effect as a live hard block.
+    await upsertRepoFocusManifest(env, "JSONbored/gittensory", { gate: { linkedIssue: "block" } });
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      if (url === "https://api.gittensor.io/miners") return Response.json([]);
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/issues/5") && !url.includes("/comments")) return Response.json({ number: 5, state: "closed", labels: [], assignees: [] });
+      if (url.includes("/commits/gate124/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
+      if (url.includes("/check-runs") && (init?.method ?? "GET") === "POST") return Response.json({ id: 901 }, { status: 201 });
+      if (url.includes("/check-runs/901") && (init?.method ?? "GET") === "PATCH") return Response.json({ id: 901, html_url: "https://github.com/checks/901" });
+      return new Response("not found", { status: 404 });
+    });
+
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "gate-stale-link",
+      eventName: "pull_request",
+      payload: {
+        action: "opened",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        pull_request: { number: 43, title: "Fake compliance", state: "open", user: { login: "contributor" }, head: { sha: "gate124" }, labels: [], body: "Closes #5" },
+      },
+    });
+
+    const summary = await env.DB.prepare("select conclusion from check_summaries where repo_full_name = ? and pull_number = ? and head_sha = ?")
+      .bind("JSONbored/gittensory", 43, "gate124")
+      .first<{ conclusion: string }>();
+    expect(summary?.conclusion).toBe("failure");
+  });
+
+  it("does NOT block under linkedIssueGateMode:block when the cited issue is genuinely OPEN", async () => {
+    const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
+    await persistRegistrySnapshot(
+      env,
+      normalizeRegistryPayload(
+        { "JSONbored/gittensory": { emission_share: 0.01, issue_discovery_share: 0 } },
+        { kind: "raw-github", url: "https://example.test" },
+        "2026-05-23T00:00:00.000Z",
+      ),
+    );
+    await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } }, 123);
+    await upsertRepositorySettings(env, {
+      repoFullName: "JSONbored/gittensory",
+      commentMode: "off",
+      publicSurface: "off",
+      autoLabelEnabled: false,
+      checkRunMode: "off",
+      gateCheckMode: "enabled",
+      linkedIssueGateMode: "block",
+      requireLinkedIssue: true,
+    });
+    await upsertRepoFocusManifest(env, "JSONbored/gittensory", { gate: { linkedIssue: "block" } });
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = input.toString();
+      if (url === "https://api.gittensor.io/miners") return Response.json([]);
+      if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+      if (url.includes("/issues/5") && !url.includes("/comments")) return Response.json({ number: 5, state: "open", labels: [], assignees: [] });
+      if (url.includes("/commits/gate125/check-runs")) return Response.json({ total_count: 0, check_runs: [] });
+      if (url.includes("/check-runs") && (init?.method ?? "GET") === "POST") return Response.json({ id: 902 }, { status: 201 });
+      if (url.includes("/check-runs/902") && (init?.method ?? "GET") === "PATCH") {
+        const body = JSON.parse(String(init?.body ?? "{}")) as { conclusion?: string; output?: { title?: string } };
+        expect(body.output?.title).not.toBe("Gittensory Orb Review Agent: No linked issue detected");
+        return Response.json({ id: 902, html_url: "https://github.com/checks/902" });
+      }
+      return new Response("not found", { status: 404 });
+    });
+
+    await processJob(env, {
+      type: "github-webhook",
+      deliveryId: "gate-open-link",
+      eventName: "pull_request",
+      payload: {
+        action: "opened",
+        installation: { id: 123, account: { login: "JSONbored", id: 1, type: "User" } },
+        repository: { name: "gittensory", full_name: "JSONbored/gittensory", private: false, owner: { login: "JSONbored" } },
+        pull_request: { number: 44, title: "Real link", state: "open", user: { login: "contributor" }, head: { sha: "gate125" }, labels: [], body: "Closes #5" },
+      },
+    });
+
+    const summary = await env.DB.prepare("select conclusion from check_summaries where repo_full_name = ? and pull_number = ? and head_sha = ?")
+      .bind("JSONbored/gittensory", 44, "gate125")
+      .first<{ conclusion: string }>();
+    expect(summary?.conclusion).not.toBe("failure");
+  });
+
   it("accepts PR-body validation evidence for configured manifest test expectations", async () => {
     const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem() });
     await persistRegistrySnapshot(
@@ -9640,6 +9751,128 @@ describe("queue processors", () => {
       expect(seen.treeCalls).toBe(0);
       expect(seen.merged).toBe(true);
       expect(seen.labels).not.toContain("migration-collision");
+    });
+  });
+
+  describe("unlinked-issue guardrail (#unlinked-issue-guardrail, credibility-gate-farming defense)", () => {
+    // Mirrors the #2550 migration-recheck fixture immediately above: full merge-eligible stub set
+    // (clean + green + approved) so a positive test proves the hold actually suppresses what would
+    // otherwise merge, and a negative test proves the guardrail correctly stays out of the way / off by
+    // default. `run` (the env.AI.run spy) is asserted directly rather than inferred from side effects.
+    function stubUnlinkedIssueGuardrailFetch(prNumber: number, seen: { closed: boolean; merged: boolean; labels: string[]; comments: string[] }) {
+      vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        const method = (init?.method ?? "GET").toUpperCase();
+        if (url === "https://api.gittensor.io/miners") return Response.json([]);
+        if (url.includes("/access_tokens")) return Response.json({ token: "installation-token" });
+        if (url.includes("/check-runs/") && method === "PATCH") return Response.json({ id: 901 });
+        if (/\/pulls\/\d+(?:\?|$)/.test(url) && method === "GET" && !url.includes(`/pulls/${prNumber}/`)) {
+          return Response.json({ number: prNumber, state: "open", user: { login: "contributor" }, head: { sha: "sha1" }, base: { ref: "main", sha: "base" }, mergeable_state: "clean", labels: [] });
+        }
+        if (url.includes(`/pulls/${prNumber}/files`)) return Response.json([{ filename: "src/queue/webhook-retry.ts", status: "modified", additions: 5, deletions: 0, changes: 5, patch: "@@\n+dedupe retries" }]);
+        if (url.includes(`/commits/sha1/check-runs`)) return Response.json({ total_count: 0, check_runs: [] });
+        if (url.includes(`/commits/sha1/status`)) return Response.json({ state: "success", statuses: [{ context: "ci/build", state: "success", description: "ok" }] });
+        if (url.includes(`/commits/sha1/check-suites`)) return Response.json({ check_suites: [] });
+        if (url.includes("/branches/")) return Response.json({ contexts: [] });
+        if (url === "https://api.github.com/graphql") return Response.json({ data: { repository: { pullRequest: { reviewDecision: "APPROVED" } } } });
+        if (url.includes(`/pulls/${prNumber}/merge`) && method === "PUT") {
+          seen.merged = true;
+          return Response.json({ merged: true, sha: "merged-sha1" });
+        }
+        if (url.includes(`/pulls/${prNumber}`) && method === "PATCH") {
+          seen.closed = JSON.parse(String(init?.body ?? "{}")).state === "closed";
+          return Response.json({ number: prNumber, state: "closed" });
+        }
+        if (url.includes(`/issues/${prNumber}/labels`) && method === "GET") return Response.json([]);
+        if (url.includes(`/issues/${prNumber}/labels`) && method === "POST") {
+          seen.labels.push(...((JSON.parse(String(init?.body ?? "{}")).labels ?? []) as string[]));
+          return Response.json([]);
+        }
+        if (url.endsWith("/labels") && method === "POST") return Response.json({ name: "x" }, { status: 201 });
+        if (url.includes(`/issues/${prNumber}/comments`) && method === "POST") {
+          seen.comments.push(String(JSON.parse(String(init?.body ?? "{}")).body ?? ""));
+          return Response.json({ id: 1 }, { status: 201 });
+        }
+        if (url.includes(`/issues/${prNumber}/comments`)) return Response.json([]);
+        if (url.includes("/check-runs") && method === "POST") return Response.json({ id: 901 }, { status: 201 });
+        return Response.json({});
+      });
+    }
+
+    async function seedGuardrailRepo(env: Env, prNumber: number, opts: { guardrailMode?: "hold" | "off"; prBody?: string; autonomy?: Record<string, string> } = {}) {
+      await upsertInstallation(env, {
+        installation: { id: 123, account: { login: "owner", id: 1, type: "Organization" }, target_type: "Organization", repository_selection: "selected", permissions: { contents: "write", pull_requests: "write", issues: "write" }, events: [] },
+      });
+      await upsertRepositoryFromGitHub(env, { name: "repo", full_name: "owner/repo", private: false, owner: { login: "owner" } }, 123);
+      await upsertRepositorySettings(env, { repoFullName: "owner/repo", autonomy: opts.autonomy ?? { merge: "auto", review_state_label: "auto" }, aiReviewMode: "off", gatePack: "oss-anti-slop", gateCheckMode: "enabled", checkRunMode: "off", commentMode: "off", publicSurface: "off" });
+      if (opts.guardrailMode !== undefined) {
+        await upsertRepoFocusManifest(env, "owner/repo", { settings: { unlinkedIssueGuardrail: { mode: opts.guardrailMode } } });
+      }
+      await upsertIssueFromGitHub(env, "owner/repo", { number: 5, title: "webhook retry duplicate bug report", state: "open", user: { login: "someone" }, labels: [], body: "retries duplicate events under heavy load, needs a dedup key" });
+      await upsertPullRequestFromGitHub(env, "owner/repo", { number: prNumber, title: "fix webhook retry duplicate bug", state: "open", user: { login: "contributor" }, head: { sha: "sha1" }, base: { ref: "main" }, labels: [], body: opts.prBody ?? "" });
+    }
+
+    it("holds a would-otherwise-merge PR when its diff appears to directly solve an existing open issue it never linked", async () => {
+      const run = vi.fn(async () => ({ response: JSON.stringify({ matched: true, confidence: 0.9, evidence: "adds the missing dedup key" }) }));
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), AI: { run } as unknown as Ai });
+      await seedGuardrailRepo(env, 80, { guardrailMode: "hold" });
+      const seen = { closed: false, merged: false, labels: [] as string[], comments: [] as string[] };
+      stubUnlinkedIssueGuardrailFetch(80, seen);
+
+      await processJob(env, { type: "agent-regate-pr", deliveryId: "unlinked-issue-hold", repoFullName: "owner/repo", prNumber: 80, installationId: 123 });
+
+      expect(seen.merged).toBe(false);
+      expect(seen.closed).toBe(false); // held, never closed — this is a hold, not a close
+      expect(seen.labels).toContain("manual-review");
+      expect(seen.comments.some((c) => c.includes("#5"))).toBe(true);
+      expect(run).toHaveBeenCalled();
+    });
+
+    it("is off by default — never calls the AI even for a PR whose diff clearly overlaps an open issue", async () => {
+      const run = vi.fn(async () => ({ response: JSON.stringify({ matched: true, confidence: 0.9, evidence: "x" }) }));
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), AI: { run } as unknown as Ai });
+      await seedGuardrailRepo(env, 81); // guardrailMode left unset — defaults off
+      const seen = { closed: false, merged: false, labels: [] as string[], comments: [] as string[] };
+      stubUnlinkedIssueGuardrailFetch(81, seen);
+
+      await processJob(env, { type: "agent-regate-pr", deliveryId: "unlinked-issue-off", repoFullName: "owner/repo", prNumber: 81, installationId: 123 });
+
+      expect(run).not.toHaveBeenCalled();
+      expect(seen.merged).toBe(true);
+    });
+
+    it("does not call the AI when the PR already links an issue, even with the guardrail on", async () => {
+      const run = vi.fn(async () => ({ response: JSON.stringify({ matched: true, confidence: 0.9, evidence: "x" }) }));
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), AI: { run } as unknown as Ai });
+      await seedGuardrailRepo(env, 82, { guardrailMode: "hold", prBody: "Closes #5" });
+      const seen = { closed: false, merged: false, labels: [] as string[], comments: [] as string[] };
+      stubUnlinkedIssueGuardrailFetch(82, seen);
+
+      await processJob(env, { type: "agent-regate-pr", deliveryId: "unlinked-issue-already-linked", repoFullName: "owner/repo", prNumber: 82, installationId: 123 });
+
+      expect(run).not.toHaveBeenCalled();
+      expect(seen.merged).toBe(true);
+    });
+
+    it("escalates to a CLOSE on a second confirmed match by the same contributor (#unlinked-issue-guardrail-followup)", async () => {
+      const run = vi.fn(async () => ({ response: JSON.stringify({ matched: true, confidence: 0.9, evidence: "adds the missing dedup key" }) }));
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: await generatePrivateKeyPem(), AI: { run } as unknown as Ai });
+
+      await seedGuardrailRepo(env, 90, { guardrailMode: "hold" });
+      const seenFirst = { closed: false, merged: false, labels: [] as string[], comments: [] as string[] };
+      stubUnlinkedIssueGuardrailFetch(90, seenFirst);
+      await processJob(env, { type: "agent-regate-pr", deliveryId: "unlinked-issue-repeat-first", repoFullName: "owner/repo", prNumber: 90, installationId: 123 });
+      expect(seenFirst.closed).toBe(false); // first confirmed match: held, not closed
+      expect(seenFirst.merged).toBe(false);
+
+      // The second PR needs `close` autonomy acting for the escalated disposition to actually execute as a
+      // close (the first PR's hold path only ever needs `merge`/`review_state_label`).
+      await seedGuardrailRepo(env, 91, { guardrailMode: "hold", autonomy: { merge: "auto", review_state_label: "auto", close: "auto" } });
+      const seenSecond = { closed: false, merged: false, labels: [] as string[], comments: [] as string[] };
+      stubUnlinkedIssueGuardrailFetch(91, seenSecond);
+      await processJob(env, { type: "agent-regate-pr", deliveryId: "unlinked-issue-repeat-second", repoFullName: "owner/repo", prNumber: 91, installationId: 123 });
+      expect(seenSecond.closed).toBe(true); // same contributor's SECOND confirmed match: closed
+      expect(seenSecond.merged).toBe(false);
     });
   });
 

@@ -464,7 +464,10 @@ import {
 import {
   loadLinkedIssueHardRules,
   resolveLinkedIssueHardRule,
+  resolveLinkedIssueHasOpenReference,
 } from "../review/linked-issue-hard-rules";
+import { DEFAULT_UNLINKED_ISSUE_GUARDRAIL } from "../review/unlinked-issue-guardrail-config";
+import { resolveUnlinkedIssueMatchDisposition } from "../review/unlinked-issue-guardrail";
 import { isOpsEnabled, runOpsAlerts } from "../review/ops-wire";
 import { isSelfTuneEnabled, runSelfTune } from "../review/selftune-wire";
 import {
@@ -1646,20 +1649,22 @@ async function sweepRepoRegate(
     const others = openPullRequests.filter(
       (other) => other.number !== pr.number,
     );
-    // Thread linked-issue authors so the re-gate sweep applies the self-authored-linked-issue block too — without
-    // this a self-authored PR re-gated by the sweep escapes a block the main webhook path applies. (#self-authored-parity)
-    const linkedIssueAuthorLogins = await resolveLinkedIssueAuthorLogins(
+    // Thread linked-issue authors + the open-reference check so the re-gate sweep applies the same
+    // self-authored-linked-issue block AND stale-issue-link countermeasure the main webhook path applies —
+    // without this a self-authored or stale-link-gaming PR re-gated by the sweep escapes both. (#self-authored-parity, #unlinked-issue-guardrail-followup)
+    const { linkedIssueAuthorLogins, confirmedNoOpenLinkedIssue } = await resolveLinkedIssueAdvisoryContext(
       env,
       sweepInstallationId,
       repoFullName,
       pr.linkedIssues,
-      settings.selfAuthoredLinkedIssueGateMode === "block",
+      settings,
     );
     const advisory = buildPullRequestAdvisory(repo, pr, {
       otherOpenPullRequests: others,
       requireLinkedIssue,
       duplicateWinnerEnabled,
       linkedIssueAuthorLogins,
+      confirmedNoOpenLinkedIssue,
     });
     const gate = evaluateGateCheck(
       advisory,
@@ -2483,6 +2488,32 @@ async function runAgentMaintenancePlanAndExecute(
     installationId,
   });
 
+  // Unlinked-issue guardrail (#unlinked-issue-guardrail, credibility-gate-farming defense): when this PR
+  // links NO issue and the repo opted in (settings.unlinkedIssueGuardrail.mode === "hold"), check whether the
+  // diff appears to directly, unambiguously solve an EXISTING open issue that was never linked -- a possible
+  // sign of a contributor slicing an issue into unlinked PRs to dodge scope scrutiny while still farming
+  // merge-ratio credibility. Config-gated AND linked-issue-count-gated at the CALL SITE (not just inside the
+  // resolver) so the diff-building work below is skipped entirely for the default-off / already-linked cases
+  // -- byte-identical extra cost, mirroring migrationCollisionHold's own gating above. A FIRST confirmed match
+  // only ever HOLDS the PR for manual review (folded into heldForManualReview); a CONFIRMED REPEAT by the
+  // same contributor (#unlinked-issue-guardrail-followup, tracked via audit_events) escalates to a CLOSE.
+  const unlinkedIssueGuardrailConfig = settings.unlinkedIssueGuardrail ?? DEFAULT_UNLINKED_ISSUE_GUARDRAIL;
+  const unlinkedIssueMatchDisposition =
+    unlinkedIssueGuardrailConfig.mode === "hold" && pr.linkedIssues.length === 0
+      ? await resolveUnlinkedIssueMatchDisposition(env, {
+          repoFullName,
+          config: unlinkedIssueGuardrailConfig,
+          linkedIssueCount: pr.linkedIssues.length,
+          prTitle: pr.title,
+          prBody: pr.body,
+          changedPaths,
+          diff: buildAiReviewDiff(changedFiles),
+          prAuthorLogin: pr.authorLogin,
+        })
+      : undefined;
+  const unlinkedIssueMatchHold = unlinkedIssueMatchDisposition?.kind === "hold" ? unlinkedIssueMatchDisposition : undefined;
+  const unlinkedIssueMatchClose = unlinkedIssueMatchDisposition?.kind === "close" ? unlinkedIssueMatchDisposition : undefined;
+
   // Contributor blacklist (#1425): resolve whether the PR author is on the repo's blacklist (the shared/global
   // list unions in once its table lands). A match short-circuits the planner to a deterministic label + close
   // ahead of merit/CI/AI; only the configured label (default "slop") reaches public actions.
@@ -2655,6 +2686,8 @@ async function runAgentMaintenancePlanAndExecute(
       closeDelaySeconds: linkedIssueRulesConfig.closeDelaySeconds,
     },
     ...(migrationCollisionHold !== undefined ? { migrationCollisionHold } : {}),
+    ...(unlinkedIssueMatchHold !== undefined ? { unlinkedIssueMatchHold } : {}),
+    ...(unlinkedIssueMatchClose !== undefined ? { unlinkedIssueMatchClose } : {}),
     pr: {
       mergeableState: liveMergeState ?? pr.mergeableState,
       reviewDecision: liveReviewDecision ?? pr.reviewDecision,
@@ -2988,16 +3021,10 @@ async function reReviewStoredPullRequest(
     ))
   )
     return;
-  const [cachedOtherOpenPullRequests, linkedIssueAuthorLogins] =
+  const [cachedOtherOpenPullRequests, { linkedIssueAuthorLogins, confirmedNoOpenLinkedIssue }] =
     await Promise.all([
       listOtherOpenPullRequests(env, repoFullName, prNumber),
-      resolveLinkedIssueAuthorLogins(
-        env,
-        installationId,
-        repoFullName,
-        pr.linkedIssues,
-        settings.selfAuthoredLinkedIssueGateMode === "block",
-      ),
+      resolveLinkedIssueAdvisoryContext(env, installationId, repoFullName, pr.linkedIssues, settings),
     ]);
   // #dup-winner / audit #15: drop any cached-open duplicate sibling already closed on GitHub before the advisory
   // (and the disposition below) elect the cluster winner, so the real lowest-OPEN PR is never demoted+auto-closed.
@@ -3012,6 +3039,7 @@ async function reReviewStoredPullRequest(
     otherOpenPullRequests,
     requireLinkedIssue: shouldCollectLinkedIssueEvidence(settings),
     duplicateWinnerEnabled: env.GITTENSORY_DUPLICATE_WINNER === "true",
+    confirmedNoOpenLinkedIssue,
     linkedIssueAuthorLogins,
   });
   await persistAdvisory(env, advisory);
@@ -5384,19 +5412,14 @@ async function processGitHubWebhook(
         });
         return;
       }
-      // Resolve settings first so the self-authored live-fetch fallback only fires when its gate is in block mode.
+      // Resolve settings first so the self-authored + open-reference live-fetch fallbacks only fire when their
+      // respective gates are in block mode.
       const settings = await resolveRepositorySettings(env, repoFullName);
-      const [repo, cachedOtherOpenPullRequests, linkedIssueAuthorLogins] =
+      const [repo, cachedOtherOpenPullRequests, { linkedIssueAuthorLogins, confirmedNoOpenLinkedIssue }] =
         await Promise.all([
           getRepository(env, repoFullName),
           listOtherOpenPullRequests(env, repoFullName, pr.number),
-          resolveLinkedIssueAuthorLogins(
-            env,
-            installationId,
-            repoFullName,
-            pr.linkedIssues,
-            settings.selfAuthoredLinkedIssueGateMode === "block",
-          ),
+          resolveLinkedIssueAdvisoryContext(env, installationId, repoFullName, pr.linkedIssues, settings),
         ]);
       // #dup-winner / audit #15: drop any cached-open duplicate sibling already closed on GitHub before the
       // advisory (and the disposition) elect the cluster winner, so the real lowest-OPEN PR is never auto-closed.
@@ -5411,6 +5434,7 @@ async function processGitHubWebhook(
         otherOpenPullRequests,
         requireLinkedIssue: shouldCollectLinkedIssueEvidence(settings),
         duplicateWinnerEnabled: env.GITTENSORY_DUPLICATE_WINNER === "true",
+        confirmedNoOpenLinkedIssue,
         linkedIssueAuthorLogins,
       });
       await persistAdvisory(env, advisory);
@@ -5959,6 +5983,27 @@ export async function resolveLinkedIssueAuthorLogins(
             .then((result) => (result.status === "found" ? result.facts.authorLogin : null)),
     ),
   );
+}
+
+// Shared per-call-site resolver for buildPullRequestAdvisory's linked-issue-derived context
+// (#unlinked-issue-guardrail-followup). Every gate-evaluating call site (the main webhook path, the cron
+// sweep, the heavy re-review pass, and authorized PR actions) already threads `linkedIssueAuthorLogins` the
+// same way; bundling the new open-reference check into the SAME resolver keeps all of them in parity rather
+// than risking only some remembering to add it. The live open-reference fetch is skipped entirely (resolves
+// `true` with no network call) unless `linkedIssueGateMode` is actually "block" -- the only mode where
+// whether a citation is open can change the gate's outcome.
+export async function resolveLinkedIssueAdvisoryContext(
+  env: Env,
+  installationId: number | null | undefined,
+  repoFullName: string,
+  linkedIssues: number[],
+  settings: Pick<RepositorySettings, "selfAuthoredLinkedIssueGateMode" | "linkedIssueGateMode">,
+): Promise<{ linkedIssueAuthorLogins: (string | null)[]; confirmedNoOpenLinkedIssue: boolean }> {
+  const [linkedIssueAuthorLogins, hasOpenReference] = await Promise.all([
+    resolveLinkedIssueAuthorLogins(env, installationId, repoFullName, linkedIssues, settings.selfAuthoredLinkedIssueGateMode === "block"),
+    settings.linkedIssueGateMode === "block" ? resolveLinkedIssueHasOpenReference({ env, repoFullName, linkedIssues, installationId }) : Promise.resolve(true),
+  ]);
+  return { linkedIssueAuthorLogins, confirmedNoOpenLinkedIssue: !hasOpenReference };
 }
 
 export function shouldCollectSlopEvidence(
@@ -10168,19 +10213,21 @@ export async function buildAuthorizedPrActionAdvisory(
     getRepository(env, repoFullName),
     listOtherOpenPullRequests(env, repoFullName, pr.number),
   ]);
-  // Mirror the main webhook path: thread linked-issue authors so an authorized PR action (gate-override / panel
-  // retrigger) honors the self-authored-linked-issue block too. installationId comes from the repo record. (#self-authored-parity)
-  const linkedIssueAuthorLogins = await resolveLinkedIssueAuthorLogins(
+  // Mirror the main webhook path: thread linked-issue authors + the open-reference check so an authorized PR
+  // action (gate-override / panel retrigger) honors the same self-authored-linked-issue block AND stale-
+  // issue-link countermeasure. installationId comes from the repo record. (#self-authored-parity, #unlinked-issue-guardrail-followup)
+  const { linkedIssueAuthorLogins, confirmedNoOpenLinkedIssue } = await resolveLinkedIssueAdvisoryContext(
     env,
     repo?.installationId ?? null,
     repoFullName,
     pr.linkedIssues,
-    settings.selfAuthoredLinkedIssueGateMode === "block",
+    settings,
   );
   const advisory = buildPullRequestAdvisory(repo, pr, {
     otherOpenPullRequests,
     requireLinkedIssue: shouldCollectLinkedIssueEvidence(settings),
     duplicateWinnerEnabled: env.GITTENSORY_DUPLICATE_WINNER === "true",
+    confirmedNoOpenLinkedIssue,
     linkedIssueAuthorLogins,
   });
   return { repo, advisory };
