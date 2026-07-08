@@ -2372,3 +2372,42 @@ export type ReviewRecap = {
   gateDecided: number;
   summary: string[];
 };
+
+/** One repo's realized review-outcome roll-up inside a maintainer recap window (#2239, foundation for #1963).
+ *  Counts are ground-truth PR outcomes + gate/recommendation calibration totals — never predictions. */
+export type MaintainerRecapRepo = {
+  repoFullName: string;
+  /** PRs with a terminal outcome (merged or closed) over the window — the outcome-calibration sample size. */
+  reviewed: number;
+  merged: number;
+  closed: number;
+  /** Gate blocks that later MERGED anyway over the window (a gate FALSE POSITIVE), from GatePrecisionReport. */
+  gateFalsePositives: number;
+  /** Blocks a maintainer explicitly OVERRODE (the strongest false-positive signal), summed across gate types. */
+  gateOverrides: number;
+  /** Recommendations that resolved NEGATIVELY (a reversal) over the window, from the outcome calibration. */
+  reversals: number;
+};
+
+/** A serializable maintainer recap: a window of gittensory's OWN review-outcome data folded across repos.
+ *  Foundation for the #1963 recap digest — the pure data-shaping seam only (no delivery, no scheduling).
+ *  Distinct from {@link ReviewRecap} (single-repo, sourced from gate merge-precision predictions); this is
+ *  multi-repo and sourced from the gate-precision + outcome-calibration aggregators. (#2239) */
+export type RecapReport = {
+  generatedAt: string;
+  windowDays: number;
+  repos: MaintainerRecapRepo[];
+  totals: {
+    reviewed: number;
+    merged: number;
+    closed: number;
+    /** Total gate blocks over the window (the denominator of {@link gateFalsePositiveRate}). */
+    blocked: number;
+    gateFalsePositives: number;
+    gateOverrides: number;
+    reversals: number;
+    /** Aggregate false-positive rate (gateFalsePositives / blocked), null when nothing was blocked. */
+    gateFalsePositiveRate: number | null;
+  };
+  summary: string[];
+};
