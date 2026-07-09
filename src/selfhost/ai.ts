@@ -353,6 +353,13 @@ export function createAnthropicAi(opts: { apiKey: string; model?: string | undef
 // SECURITY: subscription CLIs get a strict allowlisted env, not the worker env. This keeps runtime
 // credentials out of prompt-injectable subprocesses while preserving CLI auth/home/proxy/cert settings. The CLI
 // runs read-only / no extra tools, and non-zero exit / empty output / error-envelope THROWS so the caller degrades.
+//
+// NOTE (#4284): the reusable half of this pattern — a parameterized allowlist builder + secret redaction — now also
+// lives in `@jsonbored/gittensory-engine` (`SUBPROCESS_CLI_ENV_ALLOWLIST`, `buildAllowlistedEnv`, `SECRET_PATTERNS`,
+// `redactSecrets`) so the coming gittensory-miner coding-agent drivers can depend on one source of truth. This copy
+// is deliberately kept parallel for now (the review path's `subscriptionCliEnv` also folds in CLI-specific PATH
+// resolution); keep the two in sync, or shim this onto the engine copy (like `src/rules/predicted-gate.ts` does) in
+// a follow-up if it drifts.
 const SUBSCRIPTION_CLI_ENV_ALLOWLIST = [
   "HOME",
   "HTTPS_PROXY",

@@ -406,3 +406,12 @@ export {
   type MaintainerNoiseReport,
   type PullRequestReviewability,
 } from "./reward-risk.js";
+
+// Shared subprocess env-allowlist + secret-redaction helpers (#4284) — one source of truth for every driver that
+// spawns a locally-authenticated CLI subprocess (src/selfhost/ai.ts and the coming gittensory-miner drivers).
+export {
+  SUBPROCESS_CLI_ENV_ALLOWLIST,
+  buildAllowlistedEnv,
+  SECRET_PATTERNS,
+  redactSecrets,
+} from "./subprocess-env.js";
