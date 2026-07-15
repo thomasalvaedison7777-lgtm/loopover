@@ -1,4 +1,4 @@
-import { GITTENSOR_SELF_REPO_DEFAULT, resolveLoopOverSelfRepoFullName } from "../config/gittensory-repo-focus-manifest";
+import { GITTENSOR_SELF_REPO_DEFAULT, resolveLoopOverSelfRepoFullName } from "../config/loopover-repo-focus-manifest";
 import {
   buildGittensorConfigRecommendation,
   buildRegistrationReadiness,
@@ -10,7 +10,7 @@ import {
 import { nowIso } from "../utils/json";
 
 // Re-exported for backward compatibility with existing callers/tests (#2911); the actual default value and
-// resolver logic live in config/gittensory-repo-focus-manifest.ts, the single source of truth shared with
+// resolver logic live in config/loopover-repo-focus-manifest.ts, the single source of truth shared with
 // upstream/ruleset.ts.
 export const DEFAULT_SELF_DOGFOOD_REPO = GITTENSOR_SELF_REPO_DEFAULT;
 

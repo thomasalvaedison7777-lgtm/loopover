@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Cross-checks the bundled fallback YAML in src/config/gittensory-repo-focus-manifest.ts
+// Cross-checks the bundled fallback YAML in src/config/loopover-repo-focus-manifest.ts
 // (LOOPOVER_REPO_FOCUS_MANIFEST_YAML) against the real root .loopover.yml. The bundled string exists so
 // the focus-manifest engine still has a sane default when the live repo file is unreachable (local dev,
 // pre-merge branches) -- see that file's own header comment -- but nothing in CI previously caught the two
@@ -10,7 +10,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parse as parseYaml } from "yaml";
-import { LOOPOVER_REPO_FOCUS_MANIFEST_YAML } from "../src/config/gittensory-repo-focus-manifest.ts";
+import { LOOPOVER_REPO_FOCUS_MANIFEST_YAML } from "../src/config/loopover-repo-focus-manifest.ts";
 
 const ROOT_MANIFEST_PATH = ".loopover.yml";
 
@@ -54,7 +54,7 @@ export function checkManifestDrift({ root, readFile = defaultReadFile, bundledYa
   if (rootJson !== bundledJson) {
     failures.push(
       [
-        `${ROOT_MANIFEST_PATH} and LOOPOVER_REPO_FOCUS_MANIFEST_YAML (src/config/gittensory-repo-focus-manifest.ts) have drifted apart.`,
+        `${ROOT_MANIFEST_PATH} and LOOPOVER_REPO_FOCUS_MANIFEST_YAML (src/config/loopover-repo-focus-manifest.ts) have drifted apart.`,
         `-- ${ROOT_MANIFEST_PATH} (parsed) --`,
         rootJson,
         `-- LOOPOVER_REPO_FOCUS_MANIFEST_YAML (parsed) --`,

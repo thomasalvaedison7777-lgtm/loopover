@@ -10,7 +10,7 @@ import { buildRepoOutcomeCalibration } from "../services/outcome-calibration";
 import { runMaintainerRecap, type MaintainerRecapRepoInput, type RunMaintainerRecapResult } from "../services/maintainer-recap";
 import { loadGatePrecisionReport } from "../services/gate-precision";
 import { loadRepoFocusManifest } from "../signals/focus-manifest-loader";
-import { resolveLoopOverSelfRepoFullName } from "../config/gittensory-repo-focus-manifest";
+import { resolveLoopOverSelfRepoFullName } from "../config/loopover-repo-focus-manifest";
 import { errorMessage } from "../utils/json";
 
 /** A manifest-sourced enable/cadence override (#2250) -- the `maintainerRecap` block of the loopover

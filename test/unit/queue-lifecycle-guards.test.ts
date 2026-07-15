@@ -1818,7 +1818,7 @@ describe("review-evasion protection (#review-evasion-protection)", () => {
       if (url.includes("/pulls/42/files")) return Response.json([]);
       // A .loopover.yml content fetch (raw.githubusercontent.com) must resolve to SOMETHING with no opinion
       // on reviewEvasionProtection -- otherwise a miss here falls through to the bundled JSONbored/gittensory
-      // fallback manifest (gittensory-repo-focus-manifest.ts), whose OWN checked-in reviewEvasionProtection:
+      // fallback manifest (loopover-repo-focus-manifest.ts), whose OWN checked-in reviewEvasionProtection:
       // close would silently outrank every test below's DB-level override (yml > DB precedence, #config-as-code).
       if (url.includes("raw.githubusercontent.com") && url.includes("loopover.y")) return new Response("source: repo_file\n", { status: 200 });
       return new Response("not found", { status: 404 });

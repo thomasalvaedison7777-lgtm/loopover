@@ -10,7 +10,7 @@ import {
   updateUpstreamDriftReportIssue,
   upsertUpstreamDriftReport,
 } from "../db/repositories";
-import { resolveLoopOverSelfRepoFullName } from "../config/gittensory-repo-focus-manifest";
+import { resolveLoopOverSelfRepoFullName } from "../config/loopover-repo-focus-manifest";
 import { githubHeaders, timeoutFetch } from "../github/client";
 import { resolveUpstreamCommitSha } from "./commit";
 import { isGlobalAgentPause } from "../settings/agent-execution";

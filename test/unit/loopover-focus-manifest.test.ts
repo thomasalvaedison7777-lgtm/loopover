@@ -5,7 +5,7 @@ import {
   LOOPOVER_REPO_FOCUS_MANIFEST_YAML,
   GITTENSOR_SELF_REPO_DEFAULT,
   resolveLoopOverSelfRepoFullName,
-} from "../../src/config/gittensory-repo-focus-manifest";
+} from "../../src/config/loopover-repo-focus-manifest";
 import { createTestEnv } from "../helpers/d1";
 import {
   buildFocusManifestGuidance,

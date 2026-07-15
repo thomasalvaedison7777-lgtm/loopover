@@ -2,9 +2,9 @@ import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { checkManifestDrift } from "../../scripts/check-manifest-drift.mjs";
-import { LOOPOVER_REPO_FOCUS_MANIFEST_YAML } from "../../src/config/gittensory-repo-focus-manifest";
+import { LOOPOVER_REPO_FOCUS_MANIFEST_YAML } from "../../src/config/loopover-repo-focus-manifest";
 
-// The script imports src/config/gittensory-repo-focus-manifest.ts (a .ts module), so -- like
+// The script imports src/config/loopover-repo-focus-manifest.ts (a .ts module), so -- like
 // check-schema-drift.mjs, check-migrations.mjs, and check-openapi-settings-parity.mjs -- it must run via
 // `tsx`, the same binary package.json's manifest:drift-check uses, rather than plain `node`.
 const TSX_BIN = join(process.cwd(), "node_modules", ".bin", "tsx");

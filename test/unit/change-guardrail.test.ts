@@ -163,7 +163,7 @@ describe("configured hard-guardrail glob examples", () => {
       "src/upstream/unmodeled-scoring-drift.ts", // scoring drift under upstream/
       "src/review/guardrail-config.ts", // the guardrail loader itself
       "src/github/backfill.ts", // CI aggregation that gates merges
-      "src/config/gittensory-repo-focus-manifest.ts", // scoring focus config
+      "src/config/loopover-repo-focus-manifest.ts", // scoring focus config
     ]) {
       expect(changedPathsHittingGuardrail([p], LOOPOVER_GLOBS)).toEqual([p]);
     }
