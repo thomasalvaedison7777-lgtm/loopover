@@ -5,6 +5,7 @@ import { changedPathsHittingGuardrail, isGuardrailHit } from "../signals/change-
 import { AGENT_LABEL_PENDING_CLOSURE } from "../review/linked-issue-hard-rules";
 import { REVIEW_THREAD_BLOCKER_CODE } from "../review/review-thread-findings";
 import { sanitizePublicComment } from "../github/commands";
+import { parseGitHubLoginList } from "../auth/security";
 
 // High-slop threshold default when a repo hasn't set slopGateMinScore (mirrors the gate's `high` band).
 const DEFAULT_SLOP_GATE_MIN_SCORE = 60;
@@ -72,14 +73,13 @@ export function resolveNullableLabel(configured: string | null | undefined, fall
 const PROTECTED_AUTOCLOSE_AUTHORS = new Set(["github-actions[bot]", "dependabot[bot]", "renovate[bot]"]);
 
 // A self-hoster running a different automation stack (mergify[bot], snyk-bot, allcontributors[bot], ...) can
-// extend the base allowlist with a comma-separated PROTECTED_AUTOCLOSE_AUTHORS_EXTRA env var instead of
-// forking the code (#4615). Additive only -- an unset/blank value never shrinks the base set below.
+// extend the base allowlist with a whitespace- or comma-separated PROTECTED_AUTOCLOSE_AUTHORS_EXTRA env var
+// instead of forking the code (#4615). Parsed through the shared parseGitHubLoginList so it splits on the same
+// `/[\s,]+/` convention every other GitHub-login-list env var uses (ADMIN_GITHUB_LOGINS, ...), not a narrower
+// comma-only split (#audit-3.13). Additive only -- an unset/blank value never shrinks the base set below.
 function protectedAutocloseAuthors(env: Env | undefined): Set<string> {
-  const extra = env?.PROTECTED_AUTOCLOSE_AUTHORS_EXTRA
-    ?.split(",")
-    .map((login) => login.trim().toLowerCase())
-    .filter(Boolean);
-  return extra && extra.length > 0 ? new Set([...PROTECTED_AUTOCLOSE_AUTHORS, ...extra]) : PROTECTED_AUTOCLOSE_AUTHORS;
+  const extra = parseGitHubLoginList(env?.PROTECTED_AUTOCLOSE_AUTHORS_EXTRA);
+  return extra.size > 0 ? new Set([...PROTECTED_AUTOCLOSE_AUTHORS, ...extra]) : PROTECTED_AUTOCLOSE_AUTHORS;
 }
 
 export function isProtectedAutomationAuthor(login: string | null | undefined, env?: Env): boolean {

@@ -1491,6 +1491,19 @@ describe("isProtectedAutomationAuthor", () => {
     expect(isProtectedAutomationAuthor("some-other-bot[bot]", env)).toBe(false);
   });
 
+  it("parses PROTECTED_AUTOCLOSE_AUTHORS_EXTRA on mixed whitespace/newline/comma separators via the shared login-list parser (#audit-3.13)", () => {
+    // Mirrors ADMIN_GITHUB_LOGINS's whitespace-OR-comma convention: before #audit-3.13 the bare `.split(",")`
+    // here would fold "snyk-bot\nallcontributors[bot] copybara[bot]" into ONE unmatched string; parseGitHubLoginList
+    // splits each into its own login.
+    const env = createTestEnv({ PROTECTED_AUTOCLOSE_AUTHORS_EXTRA: "mergify[bot], snyk-bot\nallcontributors[bot]  copybara[bot]" });
+    expect(isProtectedAutomationAuthor("mergify[bot]", env)).toBe(true);
+    expect(isProtectedAutomationAuthor("snyk-bot", env)).toBe(true);
+    expect(isProtectedAutomationAuthor("allcontributors[bot]", env)).toBe(true);
+    expect(isProtectedAutomationAuthor("copybara[bot]", env)).toBe(true);
+    expect(isProtectedAutomationAuthor("github-actions[bot]", env)).toBe(true); // base set still honored
+    expect(isProtectedAutomationAuthor("unlisted-bot[bot]", env)).toBe(false);
+  });
+
   it("ignores a blank/whitespace-only PROTECTED_AUTOCLOSE_AUTHORS_EXTRA (never shrinks the base set)", () => {
     const blank = createTestEnv({ PROTECTED_AUTOCLOSE_AUTHORS_EXTRA: "  ,  ," });
     expect(isProtectedAutomationAuthor("github-actions[bot]", blank)).toBe(true);
