@@ -491,4 +491,60 @@ describe("fetchSelfReviewContext (#5145)", () => {
       else process.env.GITHUB_TOKEN = original;
     }
   });
+
+  it("bounds every fetch (GitHub REST, raw manifest, Gittensor contributor lookup) with a per-call AbortSignal timeout, defaulting to 10s (#miner-github-read-timeouts)", async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+    const capturedSignals: unknown[] = [];
+    const fetchImpl = async (url: string, init?: { signal?: unknown }) => {
+      capturedSignals.push(init?.signal);
+      if (url.includes("api.gittensor.io/miners")) return jsonResponse([{ githubUsername: "miner-bot" }]);
+      if (url.includes("/repos/acme/widgets/issues")) return jsonResponse([]);
+      if (url.includes("/repos/acme/widgets/pulls")) return jsonResponse([]);
+      if (url.includes("/repos/acme/widgets")) return jsonResponse(REPO_PAYLOAD);
+      if (url.includes("raw.githubusercontent.com")) return jsonResponse(null, 404);
+      return jsonResponse(null, 404);
+    };
+
+    await fetchSelfReviewContext("acme/widgets", { fetchImpl: fetchImpl as never, contributorLogin: "miner-bot" });
+
+    // repo + issues + pulls (githubGetJson) + 4 manifest candidates + 1 contributor lookup = 8 calls, every one bounded.
+    expect(capturedSignals.length).toBeGreaterThanOrEqual(7);
+    for (const signal of capturedSignals) expect(signal).toBeInstanceOf(AbortSignal);
+    expect(timeoutSpy.mock.calls.every(([ms]) => ms === 10_000)).toBe(true);
+    timeoutSpy.mockRestore();
+  });
+
+  it("honors a custom requestTimeoutMs instead of the 10s default, across all three fetch call sites", async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+    const fetchImpl = routedFetch({
+      "api.gittensor.io/miners": () => jsonResponse([]),
+      "/repos/acme/widgets/issues": () => jsonResponse([]),
+      "/repos/acme/widgets/pulls": () => jsonResponse([]),
+      "/repos/acme/widgets": () => jsonResponse(REPO_PAYLOAD),
+      "raw.githubusercontent.com": () => jsonResponse(null, 404),
+    });
+
+    await fetchSelfReviewContext("acme/widgets", { fetchImpl: fetchImpl as never, requestTimeoutMs: 4000 });
+
+    expect(timeoutSpy.mock.calls.length).toBeGreaterThan(0);
+    expect(timeoutSpy.mock.calls.every(([ms]) => ms === 4000)).toBe(true);
+    timeoutSpy.mockRestore();
+  });
+
+  it("falls back to the 10s default when requestTimeoutMs is not a positive integer", async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+    const fetchImpl = routedFetch({
+      "api.gittensor.io/miners": () => jsonResponse([]),
+      "/repos/acme/widgets/issues": () => jsonResponse([]),
+      "/repos/acme/widgets/pulls": () => jsonResponse([]),
+      "/repos/acme/widgets": () => jsonResponse(REPO_PAYLOAD),
+      "raw.githubusercontent.com": () => jsonResponse(null, 404),
+    });
+
+    await fetchSelfReviewContext("acme/widgets", { fetchImpl: fetchImpl as never, requestTimeoutMs: -3 });
+
+    expect(timeoutSpy.mock.calls.length).toBeGreaterThan(0);
+    expect(timeoutSpy.mock.calls.every(([ms]) => ms === 10_000)).toBe(true);
+    timeoutSpy.mockRestore();
+  });
 });

@@ -12,5 +12,5 @@ export type LiveIssueSnapshotFetch = (
 export function fetchLiveIssueSnapshot(
   repoFullName: string,
   issueNumber: number,
-  options?: { githubToken?: string; graphqlUrl?: string; fetchImpl?: LiveIssueSnapshotFetch },
+  options?: { githubToken?: string; graphqlUrl?: string; fetchImpl?: LiveIssueSnapshotFetch; requestTimeoutMs?: number },
 ): Promise<LiveIssueSnapshot | null>;

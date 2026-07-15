@@ -29,12 +29,14 @@ const defaultSleep = (delayMs) => new Promise((resolve) => setTimeout(resolve, d
  * Perform `fetchFn(url, init)` with bounded retry on a transient 5xx response. A 5xx is retried (sleeping
  * `backoffMs(attempt)` between attempts) up to `maxAttempts`; a 2xx/3xx/4xx response is returned immediately, and
  * after the last attempt a lingering 5xx is returned as-is (the caller's own error handling still runs). A THROWN
- * error is NOT retried — it propagates to the caller (the pollers' #4281 failure-mode contract).
+ * error is NOT retried — it propagates to the caller (the pollers' #4281 failure-mode contract). When `timeoutMs`
+ * is given, each attempt gets its own fresh abort timeout (a stalled connection is exactly the kind of network-
+ * level failure #4281 already bubbles unretried, so a timed-out attempt propagates the same way).
  *
  * @param {(url: any, init?: any) => Promise<any>} fetchFn
  * @param {any} url
  * @param {any} [init]
- * @param {{ maxAttempts?: number, sleepFn?: (ms: number) => Promise<unknown>, backoffMs?: (attempt: number) => number }} [options]
+ * @param {{ maxAttempts?: number, sleepFn?: (ms: number) => Promise<unknown>, backoffMs?: (attempt: number) => number, timeoutMs?: number }} [options]
  * @returns {Promise<any>} the fetch response
  */
 export async function fetchWithRetry(fetchFn, url, init, options = {}) {
@@ -43,10 +45,21 @@ export async function fetchWithRetry(fetchFn, url, init, options = {}) {
   const backoffMs = typeof options.backoffMs === "function" ? options.backoffMs : defaultRetryBackoffMs;
   for (let attempt = 1; ; attempt += 1) {
     // A thrown error is intentionally NOT caught here — it propagates to the caller unchanged.
-    const response = await fetchFn(url, init);
+    const response = await fetchOnce(fetchFn, url, init, options.timeoutMs);
     // Retry only transient SERVER errors (5xx). Return 2xx/3xx/4xx immediately; on the final attempt a lingering
     // 5xx is returned as-is.
     if (response.status < 500 || attempt >= maxAttempts) return response;
     await sleepFn(backoffMs(attempt));
   }
+}
+
+// A fresh AbortSignal.timeout() per attempt, never one shared across retries -- reusing a single signal would
+// leave every attempt after the first pre-aborted the instant it fired once. AbortSignal.timeout()'s own internal
+// timer is unref'd (verified: it never keeps a short-lived CLI process alive past its own work), so unlike a raw
+// setTimeout it needs no manual clearTimeout -- mirrors src/github/client.ts's timeoutFetch in the main repo. A
+// no-op passthrough (no `init` copy) when `timeoutMs` is absent/non-positive, so every existing caller that
+// doesn't opt in sees zero behavior change.
+function fetchOnce(fetchFn, url, init, timeoutMs) {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return fetchFn(url, init);
+  return fetchFn(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
 }

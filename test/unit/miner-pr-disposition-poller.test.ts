@@ -134,6 +134,28 @@ describe("PR disposition poller (#5135)", () => {
     const result = await pollPrDisposition("acme/widgets", 13, { apiBaseUrl: API, fetchFn });
     expect(result).toEqual({ state: "open", merged: false, closedAt: null, attempts: 1 });
   });
+
+  it("bounds the request with a per-attempt AbortSignal timeout, defaulting to 10s (#miner-github-read-timeouts)", async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+    const fetchFn = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => prResponse({ state: "open" }));
+
+    await pollPrDisposition("acme/widgets", 14, { apiBaseUrl: API, fetchFn });
+
+    expect(timeoutSpy).toHaveBeenCalledWith(10_000);
+    const [, init] = fetchFn.mock.calls[0]!;
+    expect((init as RequestInit | undefined)?.signal).toBeInstanceOf(AbortSignal);
+    timeoutSpy.mockRestore();
+  });
+
+  it("honors a custom requestTimeoutMs instead of the 10s default", async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+    const fetchFn = vi.fn(async () => prResponse({ state: "open" }));
+
+    await pollPrDisposition("acme/widgets", 15, { apiBaseUrl: API, fetchFn, requestTimeoutMs: 3000 });
+
+    expect(timeoutSpy).toHaveBeenCalledWith(3000);
+    timeoutSpy.mockRestore();
+  });
 });
 
 describe("classifyPrDisposition (#5135)", () => {

@@ -8,5 +8,6 @@ export function fetchWithRetry<Response extends { status: number }>(
     maxAttempts?: number;
     sleepFn?: (ms: number) => Promise<unknown>;
     backoffMs?: (attempt: number) => number;
+    timeoutMs?: number;
   },
 ): Promise<Response>;

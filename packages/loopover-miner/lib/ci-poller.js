@@ -4,6 +4,7 @@ const defaultApiBaseUrl = "https://api.github.com";
 const defaultMinIntervalMs = 60_000;
 const defaultMaxIntervalMs = 5 * 60_000;
 const defaultMaxAttempts = 1;
+const defaultRequestTimeoutMs = 10_000;
 const githubApiVersion = "2022-11-28";
 
 function normalizeApiBaseUrl(value) {
@@ -37,6 +38,7 @@ function normalizeOptions(options = {}) {
     maxAttempts: normalizePositiveInt(options.maxAttempts, defaultMaxAttempts, 1, 20),
     minIntervalMs: normalizePositiveInt(options.minIntervalMs, defaultMinIntervalMs, 1, 60 * 60_000),
     maxIntervalMs: normalizePositiveInt(options.maxIntervalMs, defaultMaxIntervalMs, 1, 60 * 60_000),
+    requestTimeoutMs: normalizePositiveInt(options.requestTimeoutMs, defaultRequestTimeoutMs, 1, 60_000),
     sleepFn:
       options.sleepFn ??
       ((delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs))),
@@ -85,12 +87,13 @@ function githubError(response, payload) {
 
 async function githubGetJsonResponse(url, options) {
   // Retry transient network errors / 5xx around this single call (#4829), distinct from the poller's own
-  // pending-retry loop; the poller's injected sleepFn keeps tests instant.
+  // pending-retry loop; the poller's injected sleepFn keeps tests instant. requestTimeoutMs bounds each
+  // individual attempt (a stalled connection previously hung this call forever -- #miner-github-read-timeouts).
   const response = await fetchWithRetry(
     options.fetchFn,
     url,
     { method: "GET", headers: githubHeaders(options.githubToken) },
-    { sleepFn: options.sleepFn },
+    { sleepFn: options.sleepFn, timeoutMs: options.requestTimeoutMs },
   );
   const payload = await response.json().catch(() => null);
   if (!response.ok) {

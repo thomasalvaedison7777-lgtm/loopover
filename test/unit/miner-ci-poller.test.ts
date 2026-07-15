@@ -371,4 +371,43 @@ describe("miner CI check-run poller (#2323)", () => {
       pollCheckRuns("acme/widgets", 12, { apiBaseUrl: API, fetchFn: malformedChecks }),
     ).rejects.toThrow("github_check_runs_malformed");
   });
+
+  it("bounds every GitHub request with a per-attempt AbortSignal timeout, defaulting to 10s (#miner-github-read-timeouts)", async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+    const fetchFn = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith("/repos/acme/widgets/pulls/42")) return prResponse("head-sha");
+      if (url.endsWith("/repos/acme/widgets/commits/head-sha/check-runs?per_page=100&page=1")) {
+        return checksResponse([checkRun("validate", "queued")]); // pending: no re-check-head-sha call
+      }
+      return jsonResponse({}, { status: 404 });
+    });
+
+    await pollCheckRuns("acme/widgets", 42, { apiBaseUrl: API, fetchFn });
+
+    expect(fetchFn).toHaveBeenCalledTimes(2); // head-sha + check-runs
+    expect(timeoutSpy).toHaveBeenCalledTimes(2);
+    expect(timeoutSpy.mock.calls.every(([ms]) => ms === 10_000)).toBe(true);
+    for (const [, init] of fetchFn.mock.calls) {
+      expect((init as RequestInit | undefined)?.signal).toBeInstanceOf(AbortSignal);
+    }
+    timeoutSpy.mockRestore();
+  });
+
+  it("honors a custom requestTimeoutMs instead of the 10s default", async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+    const fetchFn = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/repos/acme/widgets/pulls/42")) return prResponse("head-sha");
+      if (url.endsWith("/repos/acme/widgets/commits/head-sha/check-runs?per_page=100&page=1")) {
+        return checksResponse([checkRun("validate", "queued")]);
+      }
+      return jsonResponse({}, { status: 404 });
+    });
+
+    await pollCheckRuns("acme/widgets", 42, { apiBaseUrl: API, fetchFn, requestTimeoutMs: 2500 });
+
+    expect(timeoutSpy.mock.calls.every(([ms]) => ms === 2500)).toBe(true);
+    timeoutSpy.mockRestore();
+  });
 });

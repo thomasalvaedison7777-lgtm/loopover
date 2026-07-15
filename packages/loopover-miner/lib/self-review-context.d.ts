@@ -23,6 +23,7 @@ export type FetchSelfReviewContextOptions = {
   fetchImpl?: SelfReviewContextFetch;
   perPage?: number;
   maxPages?: number;
+  requestTimeoutMs?: number;
 };
 
 export function fetchSelfReviewContext(repoFullName: string, options?: FetchSelfReviewContextOptions): Promise<SelfReviewContextResult>;

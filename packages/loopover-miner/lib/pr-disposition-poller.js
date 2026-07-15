@@ -15,6 +15,7 @@ const defaultApiBaseUrl = "https://api.github.com";
 const defaultMinIntervalMs = 60_000;
 const defaultMaxIntervalMs = 5 * 60_000;
 const defaultMaxAttempts = 1;
+const defaultRequestTimeoutMs = 10_000;
 const githubApiVersion = "2022-11-28";
 
 function normalizeApiBaseUrl(value) {
@@ -48,6 +49,7 @@ function normalizeOptions(options = {}) {
     maxAttempts: normalizePositiveInt(options.maxAttempts, defaultMaxAttempts, 1, 20),
     minIntervalMs: normalizePositiveInt(options.minIntervalMs, defaultMinIntervalMs, 1, 60 * 60_000),
     maxIntervalMs: normalizePositiveInt(options.maxIntervalMs, defaultMaxIntervalMs, 1, 60 * 60_000),
+    requestTimeoutMs: normalizePositiveInt(options.requestTimeoutMs, defaultRequestTimeoutMs, 1, 60_000),
     sleepFn:
       options.sleepFn ??
       ((delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs))),
@@ -95,9 +97,12 @@ function githubError(response, payload) {
 }
 
 async function fetchPullRequest(target, prNumber, options) {
+  // Bounded so a stalled connection can't hang a poll cycle forever (#miner-github-read-timeouts) -- a fresh
+  // AbortSignal.timeout() per call, matching ci-poller.js's sibling fetchWithRetry treatment.
   const response = await options.fetchFn(apiUrl(options.apiBaseUrl, repoPath(target, `/pulls/${prNumber}`)), {
     method: "GET",
     headers: githubHeaders(options.githubToken),
+    signal: AbortSignal.timeout(options.requestTimeoutMs),
   });
   const payload = await response.json().catch(() => null);
   if (!response.ok) throw githubError(response, payload);

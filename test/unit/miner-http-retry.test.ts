@@ -7,14 +7,16 @@ const noSleep = () => Promise.resolve();
 function scriptedFetch(script: Array<number | "throw">) {
   let call = 0;
   const calls: unknown[] = [];
-  const fn = async (url: unknown) => {
+  const inits: Array<Record<string, unknown> | undefined> = [];
+  const fn = async (url: unknown, init?: unknown) => {
     calls.push(url);
+    inits.push(init as Record<string, unknown> | undefined);
     const step = script[Math.min(call, script.length - 1)] ?? 200;
     call += 1;
     if (step === "throw") throw new Error("network down");
     return { status: step };
   };
-  return { fn, get calls() { return calls; } };
+  return { fn, get calls() { return calls; }, get inits() { return inits; } };
 }
 
 describe("fetchWithRetry (#4829)", () => {
@@ -78,6 +80,37 @@ describe("fetchWithRetry (#4829)", () => {
     await fetchWithRetry(f.fn, "u", undefined, { maxAttempts: 0.5 as unknown as number, sleepFn, backoffMs: (a) => a * 10 });
     expect(f.calls).toHaveLength(3);
     expect(delays).toEqual([10, 20]);
+  });
+});
+
+describe("fetchWithRetry timeoutMs (#miner-github-read-timeouts)", () => {
+  it("does not inject a signal when timeoutMs is absent (undefined)", async () => {
+    const f = scriptedFetch([200]);
+    await fetchWithRetry(f.fn, "u", { method: "GET" }, { sleepFn: noSleep });
+    expect(f.inits[0]?.signal).toBeUndefined();
+  });
+
+  it("does not inject a signal when timeoutMs is non-positive or non-finite", async () => {
+    const f = scriptedFetch([200, 200, 200]);
+    await fetchWithRetry(f.fn, "u", { method: "GET" }, { sleepFn: noSleep, timeoutMs: 0 });
+    await fetchWithRetry(f.fn, "u", { method: "GET" }, { sleepFn: noSleep, timeoutMs: -5 });
+    await fetchWithRetry(f.fn, "u", { method: "GET" }, { sleepFn: noSleep, timeoutMs: Number.NaN });
+    expect(f.inits.map((i) => i?.signal)).toEqual([undefined, undefined, undefined]);
+  });
+
+  it("injects a fresh AbortSignal per attempt when timeoutMs is positive and finite, without losing the caller's own init fields", async () => {
+    const f = scriptedFetch([500, 500, 200]);
+    await fetchWithRetry(f.fn, "u", { method: "GET", headers: { a: "b" } }, { maxAttempts: 5, sleepFn: noSleep, timeoutMs: 5000 });
+    expect(f.inits).toHaveLength(3);
+    for (const init of f.inits) {
+      expect(init?.signal).toBeInstanceOf(AbortSignal);
+      expect(init?.method).toBe("GET");
+      expect(init?.headers).toEqual({ a: "b" });
+    }
+    // Each retry attempt gets its OWN fresh signal -- reusing one across attempts would leave every attempt
+    // after the first pre-aborted the instant it fired once.
+    expect(f.inits[0]?.signal).not.toBe(f.inits[1]?.signal);
+    expect(f.inits[1]?.signal).not.toBe(f.inits[2]?.signal);
   });
 });
 

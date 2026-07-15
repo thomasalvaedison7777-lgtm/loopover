@@ -10,6 +10,7 @@
 const DEFAULT_GRAPHQL_URL = "https://api.github.com/graphql";
 const GITHUB_API_VERSION = "2022-11-28";
 const MAX_REFERENCING_PRS = 50;
+const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
 
 const LIVE_ISSUE_SNAPSHOT_QUERY = `
   query($owner: String!, $repo: String!, $number: Int!, $maxPrs: Int!) {
@@ -76,7 +77,7 @@ function parseRepoFullName(repoFullName) {
  *
  * @param {string} repoFullName
  * @param {number} issueNumber
- * @param {{ githubToken?: string, graphqlUrl?: string, fetchImpl?: typeof fetch }} [options]
+ * @param {{ githubToken?: string, graphqlUrl?: string, fetchImpl?: typeof fetch, requestTimeoutMs?: number }} [options]
  * @returns {Promise<import("./submission-freshness-check.js").LiveIssueSnapshot | null>}
  */
 export async function fetchLiveIssueSnapshot(repoFullName, issueNumber, options = {}) {
@@ -87,7 +88,12 @@ export async function fetchLiveIssueSnapshot(repoFullName, issueNumber, options 
     typeof options.graphqlUrl === "string" && options.graphqlUrl.trim() ? options.graphqlUrl.trim() : DEFAULT_GRAPHQL_URL;
   const githubToken = options.githubToken ?? process.env.GITHUB_TOKEN ?? "";
   const fetchImpl = options.fetchImpl ?? fetch;
+  const requestTimeoutMs = Number.isInteger(options.requestTimeoutMs) && options.requestTimeoutMs > 0 ? options.requestTimeoutMs : DEFAULT_REQUEST_TIMEOUT_MS;
 
+  // Bounded so a stalled connection can't hang this "never throws" fetcher forever (#miner-github-read-timeouts):
+  // a timeout falls into the SAME catch as any other transport failure, which the caller (checkSubmissionFreshness)
+  // already treats as "live_state_unavailable" -- a fail-closed abort distinct from "issue_closed"/"already_addressed",
+  // never confused with a confirmed-gone issue.
   let response;
   try {
     response = await fetchImpl(graphqlUrl, {
@@ -97,6 +103,7 @@ export async function fetchLiveIssueSnapshot(repoFullName, issueNumber, options 
         query: LIVE_ISSUE_SNAPSHOT_QUERY,
         variables: { owner: target.owner, repo: target.repo, number: issueNumber, maxPrs: MAX_REFERENCING_PRS },
       }),
+      signal: AbortSignal.timeout(requestTimeoutMs),
     });
   } catch {
     return null;

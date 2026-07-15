@@ -23,6 +23,7 @@ const DEFAULT_RAW_CONTENT_BASE_URL = "https://raw.githubusercontent.com";
 const DEFAULT_GITTENSOR_API_BASE = "https://api.gittensor.io";
 const DEFAULT_PER_PAGE = 100;
 const DEFAULT_MAX_PAGES = 10;
+const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
 
 // Mirrors src/signals/focus-manifest-loader.ts's MANIFEST_FILE_CANDIDATES exactly -- first candidate that
 // resolves wins, same as the live gate's own lookup order.
@@ -59,11 +60,19 @@ function normalizeOptions(options = {}) {
     maxPages: Number.isInteger(options.maxPages) && options.maxPages > 0 ? options.maxPages : DEFAULT_MAX_PAGES,
     contributorLogin: typeof options.contributorLogin === "string" ? options.contributorLogin.trim() : "",
     linkedIssues: Array.isArray(options.linkedIssues) ? options.linkedIssues.filter((n) => Number.isInteger(n)) : [],
+    requestTimeoutMs: Number.isInteger(options.requestTimeoutMs) && options.requestTimeoutMs > 0 ? options.requestTimeoutMs : DEFAULT_REQUEST_TIMEOUT_MS,
   };
 }
 
+// A fresh AbortSignal.timeout() per call, so a stalled connection can't hang context construction forever
+// (#miner-github-read-timeouts) -- shared by this file's three independent fetch call sites (GitHub REST, raw
+// manifest content, the Gittensor contributor lookup).
+async function fetchWithTimeout(fetchImpl, url, init, timeoutMs) {
+  return fetchImpl(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+}
+
 async function githubGetJson(url, resolved) {
-  const response = await resolved.fetchImpl(url, { method: "GET", headers: githubHeaders(resolved.githubToken) });
+  const response = await fetchWithTimeout(resolved.fetchImpl, url, { method: "GET", headers: githubHeaders(resolved.githubToken) }, resolved.requestTimeoutMs);
   const payload = await response.json().catch(() => null);
   return { response, payload };
 }
@@ -250,7 +259,7 @@ async function fetchManifestContent(target, resolved) {
   for (const path of MANIFEST_FILE_CANDIDATES) {
     const url = `${resolved.rawContentBaseUrl}/${encodeURIComponent(target.owner)}/${encodeURIComponent(target.repo)}/HEAD/${path}`;
     try {
-      const response = await resolved.fetchImpl(url, { method: "GET", headers: { accept: "application/json", "user-agent": "loopover-miner" } });
+      const response = await fetchWithTimeout(resolved.fetchImpl, url, { method: "GET", headers: { accept: "application/json", "user-agent": "loopover-miner" } }, resolved.requestTimeoutMs);
       if (response.ok) {
         const text = await readBoundedManifestResponseText(response);
         if (typeof text === "string") return text;
@@ -268,7 +277,7 @@ async function fetchManifestContent(target, resolved) {
 async function fetchConfirmedContributor(login, resolved) {
   if (!login) return false;
   try {
-    const response = await resolved.fetchImpl(`${resolved.gittensorApiBase}/miners`, { method: "GET", headers: { accept: "application/json" } });
+    const response = await fetchWithTimeout(resolved.fetchImpl, `${resolved.gittensorApiBase}/miners`, { method: "GET", headers: { accept: "application/json" } }, resolved.requestTimeoutMs);
     if (!response.ok) return false;
     const payload = await response.json().catch(() => null);
     if (!Array.isArray(payload)) return false;
@@ -308,7 +317,7 @@ function computeInDuplicateCluster(repoFullName, issues, pullRequests, targetIss
  * @param {{
  *   githubToken?: string, contributorLogin?: string, linkedIssues?: number[],
  *   apiBaseUrl?: string, rawContentBaseUrl?: string, gittensorApiBase?: string,
- *   fetchImpl?: typeof fetch, perPage?: number, maxPages?: number,
+ *   fetchImpl?: typeof fetch, perPage?: number, maxPages?: number, requestTimeoutMs?: number,
  * }} [options]
  * @returns {Promise<import("./self-review-context.js").SelfReviewContextResult>}
  */

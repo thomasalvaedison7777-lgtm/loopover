@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { fetchLiveIssueSnapshot } from "../../packages/loopover-miner/lib/live-issue-snapshot.js";
 
 function graphqlResponse(body: unknown, status = 200) {
@@ -154,5 +154,44 @@ describe("fetchLiveIssueSnapshot (#5132)", () => {
       },
     });
     expect(capturedUrl).toBe("https://ghe.example.com/api/graphql");
+  });
+
+  it("bounds the request with a per-attempt AbortSignal timeout, defaulting to 10s (#miner-github-read-timeouts)", async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+    let capturedSignal: AbortSignal | undefined;
+    const fetchImpl = async (_url: string, init: RequestInit) => {
+      capturedSignal = init.signal as AbortSignal;
+      return { ok: true, status: 200, json: async () => ({ data: { repository: { issue: { state: "OPEN", closedByPullRequestsReferences: { nodes: [] } } } } }) } as Response;
+    };
+
+    await fetchLiveIssueSnapshot("acme/widgets", 7, { fetchImpl });
+
+    expect(timeoutSpy).toHaveBeenCalledWith(10_000);
+    expect(capturedSignal).toBeInstanceOf(AbortSignal);
+    timeoutSpy.mockRestore();
+  });
+
+  it("honors a custom requestTimeoutMs instead of the 10s default", async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+    const fetchImpl = async () =>
+      ({ ok: true, status: 200, json: async () => ({ data: { repository: { issue: { state: "OPEN", closedByPullRequestsReferences: { nodes: [] } } } } }) }) as Response;
+
+    await fetchLiveIssueSnapshot("acme/widgets", 7, { fetchImpl, requestTimeoutMs: 1500 });
+
+    expect(timeoutSpy).toHaveBeenCalledWith(1500);
+    timeoutSpy.mockRestore();
+  });
+
+  it("falls back to the 10s default when requestTimeoutMs is not a positive integer", async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+    const fetchImpl = async () =>
+      ({ ok: true, status: 200, json: async () => ({ data: { repository: { issue: { state: "OPEN", closedByPullRequestsReferences: { nodes: [] } } } } }) }) as Response;
+
+    await fetchLiveIssueSnapshot("acme/widgets", 7, { fetchImpl, requestTimeoutMs: 0 });
+    await fetchLiveIssueSnapshot("acme/widgets", 7, { fetchImpl, requestTimeoutMs: -5 });
+    await fetchLiveIssueSnapshot("acme/widgets", 7, { fetchImpl, requestTimeoutMs: 12.5 });
+
+    expect(timeoutSpy.mock.calls).toEqual([[10_000], [10_000], [10_000]]);
+    timeoutSpy.mockRestore();
   });
 });

@@ -23,6 +23,7 @@ export type PollCheckRunsOptions = {
   maxAttempts?: number;
   minIntervalMs?: number;
   maxIntervalMs?: number;
+  requestTimeoutMs?: number;
   sleepFn?: (delayMs: number) => Promise<unknown>;
 };
 
