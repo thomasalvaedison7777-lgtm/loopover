@@ -1,7 +1,8 @@
-// Docs-accuracy audit for the miner's DEPLOYMENT.md (#5180). Mirrors the self-host docs audit
+// Docs-accuracy audit for the miner's DEPLOYMENT.md (#5180, #6601). Mirrors the self-host docs audit
 // (apps/loopover-ui/src/lib/selfhost-docs-audit.ts): parse the deployment doc, then assert every
 // LOOPOVER_MINER_* / MINER_* env var, repo-relative file path, and `loopover-miner <subcommand>`
-// it documents still exists under packages/loopover-miner/**. A rename or move that leaves the doc
+// it documents still exists under packages/loopover-miner/** — and the reverse for non-_DB
+// LOOPOVER_MINER_* reads that the doc never mentions (#6601). A rename or move that leaves the doc
 // stale then fails CI with a message naming the exact stale claim, instead of misleading operators.
 // Wired into CI via `npm run test:miner-deployment-docs-audit` (scripts/check-miner-deployment-docs.mjs)
 // and the live unit suite in test/unit/miner-deployment-docs-audit.test.ts (#6158).
@@ -75,11 +76,19 @@ export function scanRegisteredCommands(binSource) {
 }
 
 /**
- * Cross-check parsed DEPLOYMENT.md claims against reality. `reality` supplies three predicates so this
- * comparison stays pure and filesystem-independent: `hasEnvRead(name)` (a read of that env var exists
- * under packages/loopover-miner/**), `pathExists(relativePath)` (the doc-relative path is on disk),
- * and `isRegisteredCommand(name)` (the subcommand is dispatched by the CLI). Returns the drift findings,
- * each failure naming the specific stale claim rather than a generic mismatch.
+ * Cross-check parsed DEPLOYMENT.md claims against reality. `reality` supplies three predicates plus
+ * an enumerable `envReads` set so this comparison stays pure and filesystem-independent:
+ * `hasEnvRead(name)` (a read of that env var exists under packages/loopover-miner/**),
+ * `envReads` (every scanned LOOPOVER_MINER_* / MINER_* token — used for the reverse check in #6601),
+ * `pathExists(relativePath)` (the doc-relative path is on disk), and `isRegisteredCommand(name)`
+ * (the subcommand is dispatched by the CLI). Returns the drift findings, each failure naming the
+ * specific stale claim rather than a generic mismatch.
+ *
+ * Reverse env-var check (#6601): every `LOOPOVER_MINER_*` token in `envReads` that does NOT end in
+ * `_DB` and is absent from `claims.envVars` is a failure. Tokens ending in `_DB` are exempt because
+ * DEPLOYMENT.md documents that family generically via `LOOPOVER_MINER_<NAME>_DB`. Bare `MINER_*`
+ * aliases (no `LOOPOVER_MINER_` prefix) are not included in the reverse direction — only the forward
+ * "documented claim must have a real read" check applies to them.
  */
 export function auditDeploymentDocs(claims, reality) {
   const failures = [];
@@ -89,6 +98,15 @@ export function auditDeploymentDocs(claims, reality) {
         `env var "${name}" is documented in DEPLOYMENT.md but no read of it exists under packages/loopover-miner/**`,
       );
     }
+  }
+  const documentedEnvVars = new Set(claims.envVars);
+  for (const name of reality.envReads) {
+    if (!name.startsWith("LOOPOVER_MINER_")) continue;
+    if (name.endsWith("_DB")) continue;
+    if (documentedEnvVars.has(name)) continue;
+    failures.push(
+      `env var "${name}" is read under packages/loopover-miner/** but is not documented in DEPLOYMENT.md`,
+    );
   }
   for (const path of claims.filePaths) {
     if (!reality.pathExists(path)) {

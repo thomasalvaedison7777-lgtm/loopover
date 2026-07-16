@@ -8,6 +8,8 @@ export type DeploymentDocsClaims = {
 /** Filesystem-independent view of the live source tree the parsed claims are checked against. */
 export type DeploymentDocsReality = {
   hasEnvRead: (name: string) => boolean;
+  /** Every scanned LOOPOVER_MINER_* / MINER_* token from miner+engine source (#6601 reverse check). */
+  envReads: Iterable<string>;
   pathExists: (relativePath: string) => boolean;
   isRegisteredCommand: (name: string) => boolean;
 };

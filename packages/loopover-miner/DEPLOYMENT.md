@@ -77,6 +77,23 @@ For provider selection and the CLI-specific model/timeout overrides, see
    `LOOPOVER_MINER_PORTFOLIO_QUEUE_DB` — to relocate an individual file. `doctor`'s `store-integrity:*` checks
    report the persistent stores, so it is the quickest way to confirm what exists and is readable on disk.
 
+   **Other operator env knobs** (catalog also in [`docs/env-reference.md`](docs/env-reference.md)):
+
+   - `LOOPOVER_MINER_LOG_LEVEL` — log verbosity (`debug` / `info` / `warn` / `error`; also `--verbose` / `--quiet`).
+   - `LOOPOVER_MINER_NO_UPDATE_CHECK` — set to `1`/`true`/`yes` to skip the startup npm-registry version nudge
+     (also `--no-update-check`).
+   - `LOOPOVER_MINER_VERSION` — override the resolved release id (fleet image builds stamp this).
+   - `LOOPOVER_MINER_REPO_CLONE_DIR` — base directory for cloned evaluation repos (`lib/repo-clone.js`).
+   - `LOOPOVER_MINER_WORKTREE_DIR` — base directory for per-attempt git worktrees (`lib/worktree-allocator.js`).
+   - `LOOPOVER_MINER_LEDGER_RETENTION_DAYS` / `LOOPOVER_MINER_LEDGER_RETENTION_MAX_ROWS` — opt-in age- and/or
+     size-based pruning for the append-only event/governor/prediction ledgers (unset ⇒ retention off).
+   - `LOOPOVER_MINER_CHAT_ACTIONS` — flag that enables chat-action dispatch (`lib/chat-action-dispatch.js`).
+   - `LOOPOVER_MINER_AMS_POLICY_PATH` — override path for the local AMS policy file (`lib/ams-policy.js`).
+   - `LOOPOVER_MINER_AMS_COLLECTOR_URL` / `LOOPOVER_MINER_AMS_COLLECTOR_TOKEN` — Orb export collector endpoint
+     and optional bearer credential (`lib/orb-export.js`).
+   - `LOOPOVER_MINER_SENTRY_DSN` / `LOOPOVER_MINER_SENTRY_ENVIRONMENT` — opt-in Sentry error tracking (no-op
+     unless the DSN is set; environment defaults to `production`).
+
 4. Optional per-repo miner goals: copy [`.loopover-miner.yml.example`](../../.loopover-miner.yml.example) to a target repo as `.loopover-miner.yml`. See [`docs/miner-goal-spec.md`](docs/miner-goal-spec.md).
 
 ## Fleet mode walkthrough

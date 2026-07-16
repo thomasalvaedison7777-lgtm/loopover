@@ -39,6 +39,8 @@ export function buildLiveMinerDeploymentReality() {
   const registered = scanRegisteredCommands(readFileSync(BIN_ENTRY, "utf8"));
   return {
     hasEnvRead: (name) => envReads.has(name),
+    // Enumerable copy of the same scan `hasEnvRead` queries — reverse undocumented-env check (#6601).
+    envReads,
     pathExists: (relativePath) => existsSync(resolve(MINER_DIR, relativePath)),
     isRegisteredCommand: (name) => registered.has(name),
   };

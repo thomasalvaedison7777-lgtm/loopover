@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  buildLiveMinerDeploymentReality,
   main,
   runMinerDeploymentDocsAudit,
 } from "../../scripts/check-miner-deployment-docs.mjs";
@@ -12,6 +13,18 @@ describe("check-miner-deployment-docs (#6158)", () => {
     expect(result.claimCounts.envVars).toBeGreaterThan(0);
     expect(result.claimCounts.filePaths).toBeGreaterThan(0);
     expect(result.claimCounts.subcommands).toBeGreaterThan(0);
+  });
+
+  it("populates envReads on live reality and the full bidirectional audit passes (#6601)", () => {
+    const reality = buildLiveMinerDeploymentReality();
+    const envReads = [...reality.envReads];
+    expect(envReads.length).toBeGreaterThan(0);
+    expect(envReads.some((name) => name.startsWith("LOOPOVER_MINER_"))).toBe(true);
+    expect(typeof reality.hasEnvRead).toBe("function");
+    // Same reality object the CI script builds — full audit (forward + reverse) must stay green.
+    const result = runMinerDeploymentDocsAudit({ reality });
+    expect(result.ok).toBe(true);
+    expect(result.failures).toEqual([]);
   });
 
   it("fails when env-var backing reads are forced missing (drift fixture)", () => {
