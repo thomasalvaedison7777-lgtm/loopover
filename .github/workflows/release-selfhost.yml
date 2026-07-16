@@ -152,7 +152,7 @@ jobs:
           fi
 
       - name: Require Sentry token for official release
-        if: github.repository == 'JSONbored/gittensory' && steps.sentry.outputs.enabled != 'true'
+        if: github.repository == 'JSONbored/loopover' && steps.sentry.outputs.enabled != 'true'
         run: |
           echo "::error::Configure SENTRY_AUTH_TOKEN in the release environment before publishing official Orb images."
           exit 1
