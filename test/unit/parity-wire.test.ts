@@ -385,12 +385,13 @@ async function seedGateEnabledRepo(env: Env): Promise<void> {
   await upsertRepositorySettings(env, {
     repoFullName: "JSONbored/gittensory",
     autoLabelEnabled: false,
-    reviewCheckMode: "required",
-    linkedIssueGateMode: "block",
     requireLinkedIssue: true,
   });
   // .loopover.yml authoritatively sets the linked-issue blocker to "block" (config-as-code).
-  await upsertRepoFocusManifest(env, "JSONbored/gittensory", { gate: { linkedIssue: "block" }, settings: { commentMode: "off", publicSurface: "off", checkRunMode: "off" } });
+  await upsertRepoFocusManifest(env, "JSONbored/gittensory", {
+    gate: { linkedIssue: "block" },
+    settings: { commentMode: "off", publicSurface: "off", checkRunMode: "off", reviewCheckMode: "required", linkedIssueGateMode: "block" },
+  });
 }
 
 // The miner-list/token/check-run endpoints the gate finalize touches; `confirmedAuthor` toggles whether the

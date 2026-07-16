@@ -797,15 +797,13 @@ describe("linked-issue satisfaction wired end-to-end through the real webhook pi
     await upsertRepositorySettings(env, {
       repoFullName: "JSONbored/metagraphed",
       autoLabelEnabled: false,
-      reviewCheckMode: "required",
       gatePack: "oss-anti-slop",
-      linkedIssueGateMode: "off",
       // The gate under test: off by default, opted into "block" here so an above-floor "unaddressed" verdict
       // becomes a real Gate-check failure -- the exact gap #3906 filed against.
       linkedIssueSatisfactionGateMode: "block",
     });
     await upsertRepoFocusManifest(env, "JSONbored/metagraphed", {
-      settings: { commentMode: "all_prs", publicSurface: "comment_only", checkRunMode: "off" },
+      settings: { commentMode: "all_prs", publicSurface: "comment_only", checkRunMode: "off", reviewCheckMode: "required", linkedIssueGateMode: "off" },
     });
 
     let gatePatchBody: { conclusion?: string; output?: { title?: string; text?: string } } = {};
@@ -887,14 +885,12 @@ describe("linked-issue satisfaction wired end-to-end through the real webhook pi
     await upsertRepositorySettings(env, {
       repoFullName: "JSONbored/metagraphed",
       autoLabelEnabled: false,
-      reviewCheckMode: "required",
       gatePack: "oss-anti-slop",
-      linkedIssueGateMode: "off",
       // No override -- linkedIssueSatisfactionGateMode is omitted, so upsertRepositorySettings persists its
       // default "off".
     });
     await upsertRepoFocusManifest(env, "JSONbored/metagraphed", {
-      settings: { commentMode: "all_prs", publicSurface: "comment_only", checkRunMode: "off" },
+      settings: { commentMode: "all_prs", publicSurface: "comment_only", checkRunMode: "off", reviewCheckMode: "required", linkedIssueGateMode: "off" },
     });
 
     let postedCommentBody = "";
@@ -953,12 +949,10 @@ describe("linked-issue satisfaction wired end-to-end through the real webhook pi
     await upsertRepositorySettings(env, {
       repoFullName: "JSONbored/metagraphed",
       autoLabelEnabled: false,
-      reviewCheckMode: "required",
-      linkedIssueGateMode: "off",
       linkedIssueSatisfactionGateMode: "advisory",
     });
     await upsertRepoFocusManifest(env, "JSONbored/metagraphed", {
-      settings: { commentMode: "off", publicSurface: "off", checkRunMode: "off" },
+      settings: { commentMode: "off", publicSurface: "off", checkRunMode: "off", reviewCheckMode: "required", linkedIssueGateMode: "off" },
     });
 
     let gatePatchBody: { conclusion?: string } = {};

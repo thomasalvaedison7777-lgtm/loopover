@@ -1057,10 +1057,8 @@ describe("GitHub backfill", () => {
       },
     });
     await upsertRepositoryFromGitHub(env, { name: "gittensory", full_name: "JSONbored/gittensory", private: true, owner: { login: "JSONbored" } }, 123);
-    await upsertRepositorySettings(env, {
-      repoFullName: "JSONbored/gittensory",
-      reviewCheckMode: "required", // checkRunMode left at its default ("off")
-    });
+    // checkRunMode left at its default ("off")
+    await upsertRepoFocusManifest(env, "JSONbored/gittensory", { settings: { reviewCheckMode: "required" } });
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
       const url = input.toString();
       if (url.endsWith("/app/installations/123")) {

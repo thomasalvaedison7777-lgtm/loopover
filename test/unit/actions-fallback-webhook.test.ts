@@ -114,11 +114,10 @@ async function seedRepoAndPr(env: ReturnType<typeof createTestEnv>, headSha: str
   await upsertRepositorySettings(env, {
     repoFullName: "owner/fallback-repo",
     autonomy: { merge: "observe", update_branch: "observe" },
-    aiReviewMode: "off",
     gatePack: "oss-anti-slop",
   });
   await upsertRepoFocusManifest(env, "owner/fallback-repo", {
-    settings: { checkRunMode: "off", commentMode: "off", publicSurface: "off" },
+    settings: { checkRunMode: "off", commentMode: "off", publicSurface: "off", aiReviewMode: "off" },
   });
   await upsertPullRequestFromGitHub(env, "owner/fallback-repo", {
     number: 55,

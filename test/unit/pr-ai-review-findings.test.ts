@@ -8,9 +8,10 @@ import {
   orderedFindingCategoryCountRows,
   parseStoredInlineFindings,
 } from "../../src/mcp/pr-ai-review-findings";
-import { markAiReviewPublished, putCachedAiReview, upsertRepositoryFromGitHub, upsertRepositorySettings } from "../../src/db/repositories";
+import { markAiReviewPublished, putCachedAiReview, upsertRepositoryFromGitHub } from "../../src/db/repositories";
 import { buildFindingCategoryCollapsible } from "../../src/review/unified-comment-bridge";
 import type { InlineFinding } from "../../src/services/ai-review";
+import { upsertRepoFocusManifest } from "../../src/signals/focus-manifest-loader";
 import { createTestEnv } from "../helpers/d1";
 
 const sampleFindings: InlineFinding[] = [
@@ -117,7 +118,7 @@ describe("loadPrAiReviewFindings", () => {
   it("returns ready with empty findings when a published review has no inline metadata", async () => {
     const env = createTestEnv();
     await upsertRepositoryFromGitHub(env, { name: "widgets", full_name: "acme/widgets", private: false, owner: { login: "acme" } });
-    await upsertRepositorySettings(env, { repoFullName: "acme/widgets", aiReviewMode: "advisory" });
+    await upsertRepoFocusManifest(env, "acme/widgets", { settings: { aiReviewMode: "advisory" } });
     await putCachedAiReview(env, "acme/widgets", 11, "sha-empty", "advisory", { notes: "Clean review.", reviewerCount: 1 });
     await markAiReviewPublished(env, "acme/widgets", 11, "sha-empty");
 
@@ -135,14 +136,14 @@ describe("loadPrAiReviewFindings", () => {
   it("returns ai_review_off and not_found on the expected branches", async () => {
     const env = createTestEnv();
     await upsertRepositoryFromGitHub(env, { name: "widgets", full_name: "acme/widgets", private: false, owner: { login: "acme" } });
-    await upsertRepositorySettings(env, { repoFullName: "acme/widgets", aiReviewMode: "off" });
+    await upsertRepoFocusManifest(env, "acme/widgets", { settings: { aiReviewMode: "off" } });
     expect(await loadPrAiReviewFindings(env, { repoFullName: "acme/widgets", pullNumber: 12, login: "miner1" })).toMatchObject({
       status: "ai_review_off",
       findings: [],
       categoryCounts: {},
     });
 
-    await upsertRepositorySettings(env, { repoFullName: "acme/widgets", aiReviewMode: "block" });
+    await upsertRepoFocusManifest(env, "acme/widgets", { settings: { aiReviewMode: "block" } });
     expect(await loadPrAiReviewFindings(env, { repoFullName: "acme/widgets", pullNumber: 12, login: "miner1" })).toMatchObject({
       status: "not_found",
       findings: [],
@@ -153,7 +154,7 @@ describe("loadPrAiReviewFindings", () => {
   it("nulls headSha when the published row omits it from the repository read", async () => {
     const env = createTestEnv();
     await upsertRepositoryFromGitHub(env, { name: "widgets", full_name: "acme/widgets", private: false, owner: { login: "acme" } });
-    await upsertRepositorySettings(env, { repoFullName: "acme/widgets", aiReviewMode: "block" });
+    await upsertRepoFocusManifest(env, "acme/widgets", { settings: { aiReviewMode: "block" } });
     await env.DB.prepare(
       `INSERT INTO ai_review_cache (repo_full_name, pull_number, head_sha, ai_review_mode, notes, reviewer_count, findings_json, metadata_json, cacheable, published_at, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,

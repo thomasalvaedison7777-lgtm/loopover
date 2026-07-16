@@ -41,7 +41,8 @@ describe("resolveRepositorySettings — self-tune override overlay (flag-gated)"
   // stale, already-promoted override silently reapplied either.
   async function seed(env: Env, autonomy: Record<string, string> = { review: "auto" }): Promise<void> {
     await env.DB.prepare("INSERT INTO repositories (full_name, owner, name, is_installed, is_registered) VALUES (?, 'acme', 'widgets', 1, 1)").bind(repo).run();
-    await repositories.upsertRepositorySettings(env, { repoFullName: repo, qualityGateMinScore: 50, autonomy });
+    await repositories.upsertRepositorySettings(env, { repoFullName: repo, autonomy });
+    await upsertRepoFocusManifest(env, repo, { settings: { qualityGateMinScore: 50 } });
     await writeLiveOverride(env as unknown as StorageEnv, repo, { confidenceFloor: 0.7 });
   }
 
@@ -60,7 +61,9 @@ describe("resolveRepositorySettings — self-tune override overlay (flag-gated)"
   it("flag ON but per-repo opt-out (`.loopover.yml` review.selftune: false): a previously-promoted override is NOT read back (50, not 70)", async () => {
     const env = createTestEnv({ LOOPOVER_REVIEW_SELFTUNE: "true" });
     await seed(env);
-    await upsertRepoFocusManifest(env, repo, { review: { selftune: false } }, "api_record");
+    // Replaces the manifest snapshot seed() just persisted (upsertRepoFocusManifest is a wholesale
+    // REPLACE, not a merge) -- re-include settings.qualityGateMinScore here so the value survives.
+    await upsertRepoFocusManifest(env, repo, { review: { selftune: false }, settings: { qualityGateMinScore: 50 } }, "api_record");
     expect((await resolveRepositorySettings(env, repo)).qualityGateMinScore).toBe(50);
   });
 
@@ -75,9 +78,9 @@ describe("resolveRepositorySettings — self-tune override overlay (flag-gated)"
     const repoFullName = "acme/blacklist";
     await env.DB.prepare("INSERT INTO repositories (full_name, owner, name, is_installed, is_registered) VALUES (?, 'acme', 'blacklist', 1, 1)").bind(repoFullName).run();
     await Promise.all([
-      repositories.upsertRepositorySettings(env, { repoFullName, qualityGateMinScore: 50 }),
+      repositories.upsertRepositorySettings(env, { repoFullName }),
       repositories.upsertGlobalContributorBlacklist(env, { contributorBlacklist: [{ login: "GlobalBad", reason: "global" }] }),
-      upsertRepoFocusManifest(env, repoFullName, { settings: { contributorBlacklist: [{ login: "ManifestBad" }] } }, "api_record"),
+      upsertRepoFocusManifest(env, repoFullName, { settings: { contributorBlacklist: [{ login: "ManifestBad" }], qualityGateMinScore: 50 } }, "api_record"),
     ]);
 
     const settings = await resolveRepositorySettings(env, repoFullName);

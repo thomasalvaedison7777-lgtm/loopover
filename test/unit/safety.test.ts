@@ -65,10 +65,9 @@ async function seedGateEnabledRepo(env: Env): Promise<void> {
   await upsertRepositorySettings(env, {
     repoFullName: "JSONbored/gittensory",
     autoLabelEnabled: false,
-    reviewCheckMode: "required",
     slopGateMode: "advisory", // turns the shared gateFiles load on so the reuse branch is hit
   });
-  await upsertRepoFocusManifest(env, "JSONbored/gittensory", { settings: { commentMode: "off", publicSurface: "off", checkRunMode: "off" } });
+  await upsertRepoFocusManifest(env, "JSONbored/gittensory", { settings: { commentMode: "off", publicSurface: "off", checkRunMode: "off", reviewCheckMode: "required" } });
   await upsertOfficialMinerDetection(env, "contributor", { status: "confirmed", snapshot: safetyMinerSnapshot("contributor") }, 60_000);
 }
 

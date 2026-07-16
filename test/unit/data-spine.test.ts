@@ -270,6 +270,9 @@ describe("data spine repositories", () => {
     // gatePack (#692) round-trips and defaults to gittensor.
     await upsertRepositorySettings(env, { repoFullName: "owner/repo", gatePack: "oss-anti-slop" });
     expect((await getRepositorySettings(env, "owner/repo")).gatePack).toBe("oss-anti-slop");
+    // Left DB-based (not manifest injection): this exercises getRepositorySettings's own raw DB round-trip
+    // directly -- it has no manifest overlay (that's resolveRepositorySettings/resolveEffectiveSettings) --
+    // so a manifest-only write here would never be observed by the assertion below.
     await upsertRepositorySettings(env, { repoFullName: "owner/repo", gatePack: "gittensor", linkedIssueGateMode: "block" });
     expect(await getRepositorySettings(env, "owner/repo")).toMatchObject({ gatePack: "gittensor", linkedIssueGateMode: "block" });
     await upsertRepositorySettings(env, { repoFullName: "owner/defaultpack" });
