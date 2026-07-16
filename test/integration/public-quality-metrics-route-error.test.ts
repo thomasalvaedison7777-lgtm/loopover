@@ -7,19 +7,17 @@ vi.mock("../../src/services/public-quality-metrics", () => ({
 
 import { createApp } from "../../src/api/routes";
 import { createTestEnv } from "../helpers/d1";
-import { upsertRepositoryFromGitHub, upsertRepositorySettings } from "../../src/db/repositories";
+import { upsertRepositoryFromGitHub } from "../../src/db/repositories";
+import { upsertRepoFocusManifest } from "../../src/signals/focus-manifest-loader";
 
 describe("GET /v1/public/repos/:owner/:repo/quality — error path", () => {
   it("returns 503 when quality metrics computation throws", async () => {
     const env = createTestEnv();
     await upsertRepositoryFromGitHub(env, { name: "quality", full_name: "acme/quality", private: false, owner: { login: "acme" }, default_branch: "main" }, 560);
-    // NOTE: publicQualityMetrics intentionally stays DB-backed here (not moved to the focus manifest)
-    // because the route under test (`loadPublicRepoQualityMetrics` in src/api/routes.ts) reads
-    // `getRepositorySettings` directly -- the same deliberate raw-DB-row bypass documented on the sibling
-    // `loadPublicRepoBadge` helper -- and never consults `resolveRepositorySettings`/the manifest overlay.
-    // Moving this field to `upsertRepoFocusManifest` would make the route see publicQualityMetrics=false
-    // (404) instead of true (503 via the mocked throw), which is a real behavior difference, not a wiring bug.
-    await upsertRepositorySettings(env, { repoFullName: "acme/quality", publicQualityMetrics: true });
+    // publicQualityMetrics has no DB column anymore (Batch A follow-up, loopover#6442) -- config-as-code
+    // only. loadPublicRepoQualityMetrics now reads resolveRepositorySettings (manifest-aware), so opt-in
+    // must go through the manifest, not a DB row.
+    await upsertRepoFocusManifest(env, "acme/quality", { settings: { publicQualityMetrics: true } });
 
     const res = await createApp().request("/v1/public/repos/acme/quality/quality", {}, env);
     expect(res.status).toBe(503);

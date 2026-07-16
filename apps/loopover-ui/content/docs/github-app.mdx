@@ -141,7 +141,8 @@ gates every author identically, regardless of config.
 
 <CodeBlock
   lang="yaml"
-  code={`# Repository settings as code — any dashboard toggle:
+  code={`# Repository settings as code -- reviewCheckMode is also a dashboard toggle; checkRunMode/commentMode/
+# publicSurface are config-as-code only (no DB column or dashboard toggle):
 settings:
   reviewCheckMode: required     # review-agent check on/off (required|visible|disabled)
   checkRunMode: enabled         # the advisory Context check on/off

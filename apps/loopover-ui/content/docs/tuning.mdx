@@ -394,7 +394,8 @@ gate:
     provider: anthropic
     model: claude-3-5-sonnet-latest
 
-# Generic dashboard-equivalent overrides
+# Generic settings overrides -- commentMode/checkRunMode/checkRunDetailLevel/badgeEnabled are
+# config-as-code only (no DB column or dashboard toggle); this file is their sole source.
 settings:
   commentMode: detected_contributors_only
   checkRunMode: enabled

@@ -35,8 +35,6 @@ const ADVISORY_SETTINGS = {
   slopAiAdvisory: false,
   autoLabelEnabled: true,
   requireLinkedIssue: false,
-  badgeEnabled: false,
-  publicQualityMetrics: false,
   commandAuthorization: {},
   autonomy: {},
   autoMaintain: { requireApprovals: 1, mergeMethod: "squash" as const },

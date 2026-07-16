@@ -21,8 +21,6 @@ const SETTINGS: MaintainerSettingsEditable = {
   slopAiAdvisory: false,
   autoLabelEnabled: true,
   requireLinkedIssue: false,
-  badgeEnabled: false,
-  publicQualityMetrics: false,
   commandAuthorization: {},
   autonomy: {},
   autoMaintain: { requireApprovals: 1, mergeMethod: "squash" },
@@ -35,7 +33,7 @@ describe("maintainer-settings-editable (#2218)", () => {
     const payload = buildMaintainerSettingsSavePayload(SETTINGS);
     expect(Object.keys(payload).sort()).toEqual([...MAINTAINER_SETTINGS_EDITABLE_KEYS].sort());
     expect(payload.linkedIssueGateMode).toBe("advisory");
-    expect(payload.badgeEnabled).toBe(false);
+    expect(payload.autoLabelEnabled).toBe(true);
   });
 
   it("buildMaintainerSettingsSavePayload merges a partial patch over the base settings", () => {
@@ -47,7 +45,7 @@ describe("maintainer-settings-editable (#2218)", () => {
     expect(payload.duplicatePrGateMode).toBe("block");
     // Untouched fields pass through unchanged.
     expect(payload.qualityGateMode).toBe("advisory");
-    expect(payload.badgeEnabled).toBe(false);
+    expect(payload.autoLabelEnabled).toBe(true);
   });
 
   it("an empty patch object is a no-op (same as omitting it)", () => {

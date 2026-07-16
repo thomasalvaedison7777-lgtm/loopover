@@ -36,8 +36,6 @@ export type MaintainerSettingsEditable = {
   // #6443: gittensorLabel/createMissingLabel removed -- no longer DB-backed, config-as-code only via
   // .loopover.yml's settings: block now (the dashboard can no longer write them).
   requireLinkedIssue: boolean;
-  badgeEnabled: boolean;
-  publicQualityMetrics: boolean;
   commandAuthorization: CommandAuthorization;
   autonomy: Partial<Record<AgentActionClass, AutonomyLevel>>;
   autoMaintain: { requireApprovals: number; mergeMethod: AutoMergeMethod };
@@ -61,8 +59,6 @@ export const MAINTAINER_SETTINGS_EDITABLE_KEYS: Array<keyof MaintainerSettingsEd
   "slopAiAdvisory",
   "autoLabelEnabled",
   "requireLinkedIssue",
-  "badgeEnabled",
-  "publicQualityMetrics",
   "commandAuthorization",
   "autonomy",
   "autoMaintain",

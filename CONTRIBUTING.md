@@ -284,10 +284,12 @@ Public GitHub surfaces:
 
 Config as code (`.loopover.yml`) — every repository setting is controllable from the config file:
 
-- **`settings:`** is a partial of the repository settings: any behaviour a maintainer can toggle in the
-  dashboard can be set here as code — `commentMode`, `publicAudienceMode`, `publicSurface`, `checkRunMode`,
-  `reviewCheckMode`, the gate-blocker modes, `autoLabelEnabled`, `gittensorLabel`, `requireLinkedIssue`,
-  `backfillEnabled`, etc.
+- **`settings:`** is a partial of the repository settings. Any behaviour a maintainer can toggle in the
+  dashboard can also be set here as code — `reviewCheckMode`, the gate-blocker modes, `autoLabelEnabled`,
+  `gittensorLabel`, `requireLinkedIssue`, etc. A subset is config-as-code **only** (no DB column, no
+  dashboard toggle — this file is their sole source): `commentMode`, `publicAudienceMode`,
+  `publicSignalLevel`, `checkRunMode`, `checkRunDetailLevel`, `publicSurface`, `includeMaintainerAuthors`,
+  `backfillEnabled`, `badgeEnabled`, `publicQualityMetrics`, `regateSweepOrderMode`.
 - **`gate:`** is a friendly typed alias for the gate subset — `enabled` (on/off), `linkedIssue`,
   `duplicates`, `readiness: { mode, minScore }` (each `off | advisory | block`).
 - **`review:`** customizes the public review-panel CONTENT: `footer: { text }` (custom lead copy — the

@@ -1185,13 +1185,12 @@ describe("api route guards and error branches", () => {
         headers: internalHeaders(env),
         body: JSON.stringify({
           gatePack: "oss-anti-slop",
-          badgeEnabled: true,
         }),
       },
       env,
     );
     expect(updated.status).toBe(200);
-    await expect(updated.json()).resolves.toMatchObject({ gatePack: "oss-anti-slop", badgeEnabled: true });
+    await expect(updated.json()).resolves.toMatchObject({ gatePack: "oss-anti-slop" });
   });
 
   it("exposes and clears self-tune overrides for operators, rejecting unauthorized callers (#6168)", async () => {

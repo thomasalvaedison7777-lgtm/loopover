@@ -282,7 +282,7 @@ describe("api routes", () => {
 
     // Installed + opted in, with assessed merged PRs.
     await upsertRepositoryFromGitHub(env, { name: "badged", full_name: "acme/badged", private: false, owner: { login: "acme" }, default_branch: "main" }, 555);
-    await upsertRepositorySettings(env, { repoFullName: "acme/badged", badgeEnabled: true });
+    await upsertRepoFocusManifest(env, "acme/badged", { settings: { badgeEnabled: true } });
     await upsertPullRequestFromGitHub(env, "acme/badged", { number: 1, title: "Feature", state: "merged", created_at: "2026-06-01T00:00:00Z", merged_at: "2026-06-01T04:00:00Z", labels: [] });
     await upsertPullRequestFromGitHub(env, "acme/badged", { number: 2, title: "Slop", state: "merged", created_at: "2026-06-02T00:00:00Z", merged_at: "2026-06-02T06:00:00Z", labels: [] });
     await updatePullRequestSlopAssessment(env, "acme/badged", 1, { slopRisk: 0, slopBand: "clean" });
@@ -310,7 +310,7 @@ describe("api routes", () => {
 
     // Private repos stay unavailable even when installed and explicitly opted in.
     await upsertRepositoryFromGitHub(env, { name: "private", full_name: "acme/private", private: true, owner: { login: "acme" }, default_branch: "main" }, 558);
-    await upsertRepositorySettings(env, { repoFullName: "acme/private", badgeEnabled: true });
+    await upsertRepoFocusManifest(env, "acme/private", { settings: { badgeEnabled: true } });
     await upsertPullRequestFromGitHub(env, "acme/private", { number: 1, title: "Secret", state: "merged", created_at: "2026-06-03T00:00:00Z", merged_at: "2026-06-03T02:00:00Z", labels: [] });
     await updatePullRequestSlopAssessment(env, "acme/private", 1, { slopRisk: 0, slopBand: "clean" });
     const privateSvg = await app.request("/v1/public/repos/acme/private/badge.svg", {}, env);
@@ -322,7 +322,7 @@ describe("api routes", () => {
 
     // Opted in but NOT installed → unavailable.
     await upsertRepositoryFromGitHub(env, { name: "uninstalled", full_name: "acme/uninstalled", private: false, owner: { login: "acme" }, default_branch: "main" });
-    await upsertRepositorySettings(env, { repoFullName: "acme/uninstalled", badgeEnabled: true });
+    await upsertRepoFocusManifest(env, "acme/uninstalled", { settings: { badgeEnabled: true } });
     const notInstalled = await app.request("/v1/public/repos/acme/uninstalled/badge.svg", {}, env);
     expect(notInstalled.status).toBe(404);
 
@@ -337,7 +337,7 @@ describe("api routes", () => {
     const env = createTestEnv();
 
     await upsertRepositoryFromGitHub(env, { name: "quality", full_name: "acme/quality", private: false, owner: { login: "acme" }, default_branch: "main" }, 560);
-    await upsertRepositorySettings(env, { repoFullName: "acme/quality", publicQualityMetrics: true });
+    await upsertRepoFocusManifest(env, "acme/quality", { settings: { publicQualityMetrics: true } });
     await upsertPullRequestFromGitHub(env, "acme/quality", { number: 1, title: "Merged", state: "merged", created_at: "2026-06-01T00:00:00Z", merged_at: "2026-06-02T00:00:00Z", labels: [] });
     await upsertPullRequestFromGitHub(env, "acme/quality", { number: 2, title: "Merged too", state: "merged", created_at: "2026-06-01T01:00:00Z", merged_at: "2026-06-02T01:00:00Z", labels: [] });
     await upsertPullRequestFromGitHub(env, "acme/quality", { number: 3, title: "Closed", state: "closed", created_at: "2026-06-03T00:00:00Z", labels: [] });
@@ -371,13 +371,13 @@ describe("api routes", () => {
 
     // Private repos stay unavailable even when installed and explicitly opted in.
     await upsertRepositoryFromGitHub(env, { name: "quality-private", full_name: "acme/quality-private", private: true, owner: { login: "acme" }, default_branch: "main" }, 562);
-    await upsertRepositorySettings(env, { repoFullName: "acme/quality-private", publicQualityMetrics: true });
+    await upsertRepoFocusManifest(env, "acme/quality-private", { settings: { publicQualityMetrics: true } });
     const privateRes = await app.request("/v1/public/repos/acme/quality-private/quality", {}, env);
     expect(privateRes.status).toBe(404);
 
     // Opted in but NOT installed → unavailable.
     await upsertRepositoryFromGitHub(env, { name: "quality-uninstalled", full_name: "acme/quality-uninstalled", private: false, owner: { login: "acme" }, default_branch: "main" });
-    await upsertRepositorySettings(env, { repoFullName: "acme/quality-uninstalled", publicQualityMetrics: true });
+    await upsertRepoFocusManifest(env, "acme/quality-uninstalled", { settings: { publicQualityMetrics: true } });
     const notInstalled = await app.request("/v1/public/repos/acme/quality-uninstalled/quality", {}, env);
     expect(notInstalled.status).toBe(404);
 
@@ -387,7 +387,7 @@ describe("api routes", () => {
     await expect(unknown.json()).resolves.toMatchObject({ error: "not_found" });
   });
 
-  it("persists the publicQualityMetrics opt-in through the settings write endpoint (#2568)", async () => {
+  it("REGRESSION (Batch A follow-up, loopover#6442): ignores a publicQualityMetrics opt-in posted to the settings write endpoint (config-as-code only now)", async () => {
     const app = createApp();
     const env = createTestEnv();
     const response = await app.request(
@@ -396,10 +396,11 @@ describe("api routes", () => {
       env,
     );
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({ repoFullName: "acme/quality", publicQualityMetrics: true });
+    // publicQualityMetrics has no DB column anymore -- only .loopover.yml's settings: block can opt a repo in.
+    await expect(response.json()).resolves.toMatchObject({ repoFullName: "acme/quality", publicQualityMetrics: false });
   });
 
-  it("persists the badgeEnabled opt-in through the settings write endpoint (#541)", async () => {
+  it("REGRESSION (Batch A follow-up, loopover#6442): ignores a badgeEnabled opt-in posted to the settings write endpoint (config-as-code only now)", async () => {
     const app = createApp();
     const env = createTestEnv();
     const response = await app.request(
@@ -408,7 +409,8 @@ describe("api routes", () => {
       env,
     );
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({ repoFullName: "acme/badged", badgeEnabled: true });
+    // badgeEnabled has no DB column anymore -- only .loopover.yml's settings: block can opt a repo in.
+    await expect(response.json()).resolves.toMatchObject({ repoFullName: "acme/badged", badgeEnabled: false });
   });
 
   it("downgrades qualityGateMode: block to advisory through the internal settings write endpoint too (#2267)", async () => {

@@ -324,11 +324,11 @@ type AppContext = Context<AppBindings>;
 async function loadPublicRepoBadge(env: Env, owner: string, repo: string): Promise<PublicRepoQuality | null> {
   const repository = await getRepository(env, `${owner}/${repo}`);
   if (!repository || repository.isPrivate || !repository.isInstalled) return null;
-  // Intentionally the raw DB row, not resolveRepositorySettings: this is an unauthenticated, high-frequency
-  // public route (a README-embedded badge image), so it deliberately trades honoring a yml-only `badgeEnabled`
-  // override for avoiding a manifest-cache lookup (and a possible cold-cache GitHub fetch) on every image load.
-  // `badgeEnabled` is normally set via the dashboard/API, which persists straight to this same DB row (#2912).
-  const settings = await getRepositorySettings(env, repository.fullName);
+  // badgeEnabled has no DB column anymore (Batch A follow-up, loopover#6442) -- config-as-code only, so
+  // this must read the resolved (manifest-overlaid) settings instead of the old raw-DB-row shortcut. An
+  // accepted perf tradeoff (a manifest-cache lookup, occasionally a cold-cache GitHub fetch, on this
+  // unauthenticated high-frequency README-badge route) in exchange for `.loopover.yml` being honored here.
+  const settings = await resolveRepositorySettings(env, repository.fullName);
   if (!settings.badgeEnabled) return null;
   const pullRequests = await listPullRequests(env, repository.fullName);
   return buildPublicRepoQuality(pullRequests);
@@ -339,7 +339,7 @@ async function loadPublicRepoBadge(env: Env, owner: string, repo: string): Promi
 async function loadPublicRepoQualityMetrics(env: Env, owner: string, repo: string) {
   const repository = await getRepository(env, `${owner}/${repo}`);
   if (!repository || repository.isPrivate || !repository.isInstalled) return null;
-  const settings = await getRepositorySettings(env, repository.fullName);
+  const settings = await resolveRepositorySettings(env, repository.fullName);
   if (!settings.publicQualityMetrics) return null;
   return loadPublicQualityMetrics(env, repository.fullName);
 }
@@ -683,8 +683,6 @@ const repositorySettingsSchema = z.object({
   // #6443: gittensorLabel/blacklistLabel/createMissingLabel/contributorBlacklist removed -- no longer
   // DB-backed, config-as-code only via .loopover.yml's settings: block now.
   requireLinkedIssue: z.boolean().default(false),
-  badgeEnabled: z.boolean().default(false),
-  publicQualityMetrics: z.boolean().default(false),
   commandAuthorization: z
     .object({
       default: z.array(z.enum(["maintainer", "collaborator", "pr_author", "confirmed_miner"])).max(4).optional(),
@@ -721,8 +719,6 @@ const maintainerSettingsSchema = z
     autoLabelEnabled: z.boolean(),
     closeOwnerAuthors: z.boolean(),
     requireLinkedIssue: z.boolean(),
-    badgeEnabled: z.boolean(),
-    publicQualityMetrics: z.boolean(),
     agentPaused: z.boolean(),
     agentDryRun: z.boolean(),
     requireFreshRebaseWindowMinutes: z.number().int().positive().nullable(),
@@ -4231,8 +4227,6 @@ export function createApp() {
         closeOwnerAuthors: parsed.data.closeOwnerAuthors,
         autoLabelEnabled: parsed.data.autoLabelEnabled,
         requireLinkedIssue: parsed.data.requireLinkedIssue,
-        badgeEnabled: parsed.data.badgeEnabled,
-        publicQualityMetrics: parsed.data.publicQualityMetrics,
         commandAuthorization: normalizeCommandAuthorizationPolicy(parsed.data.commandAuthorization).policy,
       }),
     );

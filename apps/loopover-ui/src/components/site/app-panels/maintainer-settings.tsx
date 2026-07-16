@@ -143,12 +143,10 @@ const SLOP_FIELDS: FieldDef[] = [
 ];
 
 // commentMode/publicSurface/publicSignalLevel/publicAudienceMode/checkRunMode/checkRunDetailLevel/
-// includeMaintainerAuthors moved off the dashboard entirely (Batch A, loopover#6442) -- configure them via
-// this repo's own .loopover.yml settings.* block instead.
+// includeMaintainerAuthors/badgeEnabled/publicQualityMetrics moved off the dashboard entirely (Batch A +
+// follow-up, loopover#6442) -- configure them via this repo's own .loopover.yml settings.* block instead.
 const SURFACE_FIELDS: FieldDef[] = [
   { key: "requireLinkedIssue", label: "Require a linked issue", kind: "toggle" },
-  { key: "badgeEnabled", label: "Repo badge", kind: "toggle" },
-  { key: "publicQualityMetrics", label: "Public quality page", kind: "toggle" },
 ];
 
 function repoApiBase(repoFullName: string): string | null {

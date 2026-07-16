@@ -3039,16 +3039,16 @@ describe("parseFocusManifest settings override + resolveEffectiveSettings", () =
     expect(eff.linkedIssueGateMode).toBe("block"); // gate: wins over settings:
   });
 
-  it("wires settings.badgeEnabled into the manifest parser and lets it override the DB value (#2555)", () => {
+  it("wires settings.badgeEnabled into the manifest parser and lets it override the built-in default (#2555, Batch A follow-up loopover#6442)", () => {
     const parsedTrue = parseFocusManifest({ settings: { badgeEnabled: true } });
     expect(parsedTrue.settings.badgeEnabled).toBe(true);
     expect(parsedTrue.warnings).toEqual([]);
     const parsedFalse = parseFocusManifest({ settings: { badgeEnabled: false } });
     expect(parsedFalse.settings.badgeEnabled).toBe(false);
 
-    const db = { badgeEnabled: false } as unknown as RepositorySettings;
-    const eff = resolveEffectiveSettings(db, parseFocusManifest({ settings: { badgeEnabled: true } }));
-    expect(eff.badgeEnabled).toBe(true); // settings: override wins over the DB-stored value
+    const base = { badgeEnabled: false } as unknown as RepositorySettings;
+    const eff = resolveEffectiveSettings(base, parseFocusManifest({ settings: { badgeEnabled: true } }));
+    expect(eff.badgeEnabled).toBe(true); // settings: override wins over the built-in default (no DB column anymore)
   });
 
   it("wires settings.includeMaintainerAuthors into the manifest parser and resolver (#2052)", () => {
@@ -3073,15 +3073,15 @@ describe("parseFocusManifest settings override + resolveEffectiveSettings", () =
     expect(reparsed.settings.includeMaintainerAuthors).toBe(true);
   });
 
-  it("wires settings.publicQualityMetrics into the manifest parser and lets it override the DB value (#2568)", () => {
+  it("wires settings.publicQualityMetrics into the manifest parser and lets it override the built-in default (#2568, Batch A follow-up loopover#6442)", () => {
     const parsedTrue = parseFocusManifest({ settings: { publicQualityMetrics: true } });
     expect(parsedTrue.settings.publicQualityMetrics).toBe(true);
     expect(parsedTrue.warnings).toEqual([]);
     const parsedFalse = parseFocusManifest({ settings: { publicQualityMetrics: false } });
     expect(parsedFalse.settings.publicQualityMetrics).toBe(false);
 
-    const db = { publicQualityMetrics: false } as unknown as RepositorySettings;
-    const eff = resolveEffectiveSettings(db, parseFocusManifest({ settings: { publicQualityMetrics: true } }));
+    const base = { publicQualityMetrics: false } as unknown as RepositorySettings;
+    const eff = resolveEffectiveSettings(base, parseFocusManifest({ settings: { publicQualityMetrics: true } }));
     expect(eff.publicQualityMetrics).toBe(true);
   });
 

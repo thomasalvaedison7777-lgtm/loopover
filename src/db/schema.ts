@@ -90,8 +90,6 @@ export const repositorySettings = sqliteTable("repository_settings", {
   closeOwnerAuthors: integer("close_owner_authors", { mode: "boolean" }).notNull().default(false),
   autoLabelEnabled: integer("auto_label_enabled", { mode: "boolean" }).notNull().default(true),
   requireLinkedIssue: integer("require_linked_issue", { mode: "boolean" }).notNull().default(false),
-  badgeEnabled: integer("badge_enabled", { mode: "boolean" }).notNull().default(false),
-  publicQualityMetrics: integer("public_quality_metrics", { mode: "boolean" }).notNull().default(false),
   commandAuthorizationJson: text("command_authorization_json").notNull().default("{}"),
   autonomyJson: text("autonomy_json").notNull().default("{}"),
   autoMaintainJson: text("auto_maintain_json").notNull().default("{}"),
