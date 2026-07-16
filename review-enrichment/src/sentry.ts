@@ -150,19 +150,6 @@ export async function initSentry(env: NodeJS.ProcessEnv): Promise<boolean> {
   }
 }
 
-export function captureError(error: unknown, context?: Record<string, unknown>): void {
-  captureScopedError(error, {
-    contextName: "rees",
-    context: {
-      ...context,
-      release: activeRelease,
-      environment: activeEnvironment,
-    },
-    fingerprint: ["rees-error"],
-    tags: {},
-  });
-}
-
 export function captureRouteError(
   error: unknown,
   context: { route: string; method: string },
