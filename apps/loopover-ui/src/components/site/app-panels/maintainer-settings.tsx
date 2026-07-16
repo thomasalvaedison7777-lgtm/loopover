@@ -302,25 +302,14 @@ export function MaintainerSettings({ reviewability }: { reviewability: Array<{ p
           />
           <div>
             <h3 className={LABEL_CLASS}>Labels</h3>
+            {/* #6443: "Label name" / "Create label if missing" removed -- gittensorLabel/createMissingLabel
+                are no longer DB-backed, config-as-code only via .loopover.yml's settings: block now. */}
             <div className="mt-2 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               <ToggleControl
                 label="Auto-label PRs"
                 hint="Only the base context label below — type labels have their own toggle"
                 value={settings.autoLabelEnabled}
                 onChange={(v) => setField("autoLabelEnabled", v)}
-              />
-              <label className="block">
-                <span className={LABEL_CLASS}>Label name</span>
-                <input
-                  value={settings.gittensorLabel}
-                  onChange={(event) => setField("gittensorLabel", event.target.value)}
-                  className={FIELD_CLASS}
-                />
-              </label>
-              <ToggleControl
-                label="Create label if missing"
-                value={settings.createMissingLabel}
-                onChange={(v) => setField("createMissingLabel", v)}
               />
             </div>
           </div>

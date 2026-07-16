@@ -33,8 +33,8 @@ export type MaintainerSettingsEditable = {
   slopGateMinScore: number | null;
   slopAiAdvisory: boolean;
   autoLabelEnabled: boolean;
-  gittensorLabel: string;
-  createMissingLabel: boolean;
+  // #6443: gittensorLabel/createMissingLabel removed -- no longer DB-backed, config-as-code only via
+  // .loopover.yml's settings: block now (the dashboard can no longer write them).
   requireLinkedIssue: boolean;
   badgeEnabled: boolean;
   publicQualityMetrics: boolean;
@@ -60,8 +60,6 @@ export const MAINTAINER_SETTINGS_EDITABLE_KEYS: Array<keyof MaintainerSettingsEd
   "slopGateMinScore",
   "slopAiAdvisory",
   "autoLabelEnabled",
-  "gittensorLabel",
-  "createMissingLabel",
   "requireLinkedIssue",
   "badgeEnabled",
   "publicQualityMetrics",

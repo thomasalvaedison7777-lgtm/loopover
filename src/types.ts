@@ -1247,8 +1247,10 @@ export type RepositorySettings = {
   plannerMode?: "inherit" | "off" | "enabled" | undefined;
   /** Review-evasion protection (#review-evasion-protection): a contributor closing or converting their OWN
    *  PR to draft while loopover has an ACTIVE review pass running against it is dodging the one-shot
-   *  review process. The effective default is `"close"` as of #4011 (see `normalizeReviewEvasionProtection`
-   *  in `db/repositories.ts`) -- `"off"` is now an explicit opt-out, not the default. `"close"` reopens (if
+   *  review process. The effective default is `"close"` as of #4011 (config-as-code only as of #6443 --
+   *  `db/repositories.ts`'s `getRepositorySettings`/`upsertRepositorySettings` always resolve this hardcoded
+   *  default now; only `.loopover.yml`'s `settings.reviewEvasionProtection` can override it) -- `"off"` is
+   *  now an explicit opt-out, not the default. `"close"` reopens (if
    *  needed) and re-closes as the App -- a close the contributor cannot themselves reopen (#one-shot-reopen)
    *  -- applies the configured label/comment, and records a `review_evasion` moderation strike. Note:
    *  `"off"` only suppresses this ENFORCEMENT -- the ready&harr;draft cycling COUNTER (`processors.ts`'s

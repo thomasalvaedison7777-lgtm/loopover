@@ -1,14 +1,26 @@
 import { describe, expect, it } from "vitest";
 import { findBlacklistEntry, isAuthorBlacklisted, mergeContributorBlacklists, normalizeContributorBlacklist } from "../../src/settings/contributor-blacklist";
 import { getGlobalContributorBlacklist, getRepositorySettings, upsertGlobalContributorBlacklist, upsertRepositorySettings } from "../../src/db/repositories";
+import { resolveRepositorySettings } from "../../src/settings/repository-settings";
+import { upsertRepoFocusManifest } from "../../src/signals/focus-manifest-loader";
 import { createTestEnv } from "../helpers/d1";
 import type { ContributorBlacklistEntry } from "../../src/types";
 
-describe("contributor blacklist DB round-trip (#1425)", () => {
-  it("persists + resolves the per-repo blacklist through the DB, dropping invalid entries", async () => {
+describe("per-repo contributor blacklist config-as-code (#1425, Batch B loopover#6443)", () => {
+  it("getRepositorySettings ignores a caller-supplied override on upsert -- moved off the DB entirely, config-as-code only via .loopover.yml now", async () => {
     const env = createTestEnv();
     await upsertRepositorySettings(env, { repoFullName: "owner/repo", contributorBlacklist: [{ login: "plagiarist", reason: "plagiarism" }, { login: "-invalid" }, { login: "farmer" }] });
     const settings = await getRepositorySettings(env, "owner/repo");
+    expect(settings.contributorBlacklist).toEqual([]);
+  });
+
+  it("resolveRepositorySettings honors an explicit per-repo blacklist from .loopover.yml's settings: block, dropping invalid entries", async () => {
+    const env = createTestEnv();
+    await upsertRepositorySettings(env, { repoFullName: "owner/repo" });
+    await upsertRepoFocusManifest(env, "owner/repo", {
+      settings: { contributorBlacklist: [{ login: "plagiarist", reason: "plagiarism" }, { login: "-invalid" }, { login: "farmer" }] },
+    });
+    const settings = await resolveRepositorySettings(env, "owner/repo");
     expect(settings.contributorBlacklist?.map((e) => e.login)).toEqual(["plagiarist", "farmer"]);
     expect(settings.contributorBlacklist?.[0]).toEqual({ login: "plagiarist", reason: "plagiarism" });
   });

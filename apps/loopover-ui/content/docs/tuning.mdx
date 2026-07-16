@@ -311,8 +311,10 @@ path holds are configured only through `settings.hardGuardrailGlobs`.
 
 ## Other repo settings
 
-Anything you can toggle in the dashboard can also be set as code under
-`settings:` in `.loopover.yml`. Common ones, all defaulting to the
+Everything you can toggle in the dashboard can also be set as code under
+`settings:` in `.loopover.yml` — plus a growing set of config-as-code-only
+fields with no dashboard control at all (moved off the DB entirely; `.loopover.yml`
+is the only way to set them). Common ones, all defaulting to the
 safe values shown:
 
 - `commentMode` — comment audience: `off` /

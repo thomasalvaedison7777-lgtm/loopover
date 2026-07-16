@@ -2624,7 +2624,9 @@ describe("api routes", () => {
         // have. slopGateMode: "block" is a DIFFERENT, legitimately-blockable dimension and is left untouched.
         // #4618/#5373: gateCheckMode is an unknown key with no effect here (removed from RepositorySettings
         // entirely) -- included to confirm it is silently ignored, not to drive reviewCheckMode.
-        body: JSON.stringify({ gateCheckMode: "enabled", reviewCheckMode: "required", slopGateMode: "block", slopGateMinScore: 55, qualityGateMode: "block", mergeTrainMode: "enforce", autonomy: { merge: "auto_with_approval", deploy: "auto" }, autoMaintain: { requireApprovals: 2, mergeMethod: "rebase" }, agentPaused: true, agentDryRun: true }),
+        // mergeTrainMode moved off the DB entirely (Batch B, loopover#6443) -- no longer a writable key on this
+        // route, config-as-code only via .loopover.yml now.
+        body: JSON.stringify({ gateCheckMode: "enabled", reviewCheckMode: "required", slopGateMode: "block", slopGateMinScore: 55, qualityGateMode: "block", autonomy: { merge: "auto_with_approval", deploy: "auto" }, autoMaintain: { requireApprovals: 2, mergeMethod: "rebase" }, agentPaused: true, agentDryRun: true }),
       },
       ownerEnv,
     );
@@ -2634,7 +2636,6 @@ describe("api routes", () => {
       slopGateMode: "block",
       slopGateMinScore: 55,
       qualityGateMode: "advisory", // #2267: downgraded, not persisted as "block"
-      mergeTrainMode: "enforce",
       autonomy: { merge: "auto_with_approval" }, // unknown action class dropped by the DB normalizer
       autoMaintain: { requireApprovals: 2, mergeMethod: "rebase" },
       agentPaused: true, // #776 kill-switch
@@ -6060,15 +6061,12 @@ describe("api routes", () => {
       repoFullName: "entrius/allways-ui",
       requireLinkedIssue: true,
       autoLabelEnabled: false,
-      createMissingLabel: false,
-      gittensorLabel: "gittensor-miner",
     });
-    // publicSurface moved off the DB entirely (Batch A, loopover#6442) -- set via manifest injection instead.
-    // createMissingLabel/gittensorLabel stay DB-injected here: buildRegistrationReadinessResponse's
-    // applyConfigAsCodeOnlyFields only overlays the effective value for Batch A's 9 fields (#6442) -- every
-    // other field, including these two, is intentionally the RAW DB value (the #2912 raw-vs-manifest
-    // comparison design), so a manifest override here would NOT show up in this response.
-    await upsertRepoFocusManifest(env, "entrius/allways-ui", { settings: { publicSurface: "off" } });
+    // publicSurface (Batch A, loopover#6442) and createMissingLabel/gittensorLabel (Batch B, loopover#6443)
+    // all moved off the DB entirely -- set via manifest injection instead. buildRegistrationReadinessResponse's
+    // applyConfigAsCodeOnlyFields overlays the effective value for both batches' fields, so only a manifest
+    // override (not a DB write) shows up in this response for any of them now.
+    await upsertRepoFocusManifest(env, "entrius/allways-ui", { settings: { publicSurface: "off", createMissingLabel: false, gittensorLabel: "gittensor-miner" } });
     const directReadiness = await app.request("/v1/repos/entrius/allways-ui/registration-readiness", { headers: apiHeaders(env) }, env);
     expect(directReadiness.status).toBe(200);
     await expect(directReadiness.json()).resolves.toMatchObject({
@@ -6083,7 +6081,9 @@ describe("api routes", () => {
       maintainerNotes: [
         "Private reviewability note with wallet, hotkey, raw trust, and farming details.",
       ],
-      settings: { publicSurface: "off" },
+      // upsertRepoFocusManifest replaces the stored manifest wholesale, so gittensorLabel needs repeating here
+      // -- the gittensor-config-recommendation check further below (confirmedMinerLabel) still depends on it.
+      settings: { publicSurface: "off", gittensorLabel: "gittensor-miner" },
     });
     const policyReadiness = await app.request("/v1/repos/entrius/allways-ui/registration-readiness", { headers: apiHeaders(env) }, env);
     expect(policyReadiness.status).toBe(200);

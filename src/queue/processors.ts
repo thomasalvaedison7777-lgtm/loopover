@@ -8042,9 +8042,9 @@ async function maybePublishPrPublicSurface(
       try {
         // Same reasoning as `typeLabelsEnabled` above: `settings.typeLabels` is optional only for
         // RepositorySettings-fixture-construction backward compat -- getRepositorySettings always
-        // resolves it to a concrete, complete PrTypeLabelSet (parseTypeLabelSet never returns
-        // undefined), so the `?? DEFAULT_TYPE_LABELS` fallback is unreachable on this webhook-
-        // integration path.
+        // resolves it to a concrete, complete PrTypeLabelSet (config-as-code only as of #6443 --
+        // hardcoded to DEFAULT_TYPE_LABELS, never undefined), so the `?? DEFAULT_TYPE_LABELS` fallback
+        // is unreachable on this webhook-integration path.
         /* v8 ignore next -- see the comment above */
         const typeLabels = settings.typeLabels ?? DEFAULT_TYPE_LABELS;
         const propagation = settings.linkedIssueLabelPropagation;
@@ -8123,8 +8123,10 @@ async function maybePublishPrPublicSurface(
             targetKey: `${repoFullName}#${pr.number}`,
             outcome: "completed",
             // `|| "none"` is unreachable: resolvePrTypeLabel's "title" source always resolves a non-empty
-            // label (deriveKindFromTitle only ever returns "bug"/"feature", and parseTypeLabelSet always
-            // falls back a built-in category to its default rather than an empty string), and its
+            // label (deriveKindFromTitle only ever returns "bug"/"feature", and a built-in category always
+            // falls back to its default rather than an empty string -- either DEFAULT_TYPE_LABELS directly
+            // for the config-as-code-only DB base (#6443), or normalizeTypeLabelSet's own fallback for a
+            // manifest override), and its
             // propagation sources only ever use a mapping's `prLabel`, which normalizeMapping drops
             // entirely when empty -- applyLabels can never be [] here.
             /* v8 ignore next */

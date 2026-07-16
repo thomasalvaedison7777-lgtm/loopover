@@ -171,8 +171,8 @@ import { normalizeContributorBlacklist } from "../settings/contributor-blacklist
 import { normalizeAutoCloseExemptLogins } from "../settings/auto-close-exempt";
 import { DEFAULT_GLOBAL_MODERATION_CONFIG, MAX_MODERATION_VIOLATION_DECAY_DAYS, normalizeModerationLabel, normalizeModerationRules, type GlobalModerationConfig, type ModerationRuleType } from "../settings/moderation-rules";
 import { normalizeAutonomyPolicy, normalizeAutoMaintainPolicy, DEFAULT_AUTO_MAINTAIN_POLICY } from "../settings/autonomy";
-import { DEFAULT_TYPE_LABELS, normalizeTypeLabelSet } from "../settings/pr-type-label";
-import { DEFAULT_LINKED_ISSUE_LABEL_PROPAGATION, normalizeLinkedIssueLabelPropagationConfig } from "../review/linked-issue-label-propagation";
+import { DEFAULT_TYPE_LABELS } from "../settings/pr-type-label";
+import { DEFAULT_LINKED_ISSUE_LABEL_PROPAGATION } from "../review/linked-issue-label-propagation";
 import { DEFAULT_LINKED_ISSUE_HARD_RULES } from "../review/linked-issue-hard-rules-config";
 import { DEFAULT_SCREENSHOT_TABLE_GATE, isScreenshotTableGateAction, normalizeScreenshotTableGateConfig } from "../review/screenshot-table-gate";
 import { decryptSecret, encryptSecret, sha256Hex } from "../utils/crypto";
@@ -646,7 +646,7 @@ export async function getRepositorySettings(env: Env, fullName: string): Promise
       moderationWarningLabel: undefined,
       moderationBannedLabel: undefined,
       skipAutomationBotAuthors: "inherit",
-      reviewEvasionProtection: "close", // #4011: default-ON -- see normalizeReviewEvasionProtection's doc comment
+      reviewEvasionProtection: "close", // #4011/#6443: default-ON, always -- a repo protects itself from self-close/draft-dodge gaming unless it explicitly opts out via .loopover.yml
       reviewEvasionLabel: DEFAULT_REVIEW_EVASION_LABEL,
       reviewEvasionComment: true,
       draftPrClosePolicy: "off",
@@ -689,13 +689,17 @@ export async function getRepositorySettings(env: Env, fullName: string): Promise
     aiReviewLowConfidenceDisposition: parseAiReviewLowConfidenceDisposition(row.aiReviewLowConfidenceDisposition),
     closeOwnerAuthors: row.closeOwnerAuthors,
     autoLabelEnabled: row.autoLabelEnabled,
-    typeLabelsEnabled: row.typeLabelsEnabled,
-    typeLabels: parseTypeLabelSet(row.typeLabelsJson),
-    linkedIssueLabelPropagation: parseLinkedIssueLabelPropagationConfig(row.linkedIssueLabelPropagationJson),
+    // Config-as-code only (Batch B, loopover#6443): no DB column backs these 12 fields anymore -- unconditional
+    // built-in defaults, matching the !row branch above. resolveEffectiveSettings still overlays a repo's
+    // .loopover.yml settings.* value over these (the sparse-merge base for typeLabels/
+    // linkedIssueLabelPropagation now always resolves to the built-in default, never a stale DB customization).
+    typeLabelsEnabled: true,
+    typeLabels: { ...DEFAULT_TYPE_LABELS },
+    linkedIssueLabelPropagation: { ...DEFAULT_LINKED_ISSUE_LABEL_PROPAGATION, mappings: [] },
     linkedIssueHardRules: { ...DEFAULT_LINKED_ISSUE_HARD_RULES, pointBearingLabels: [], maintainerOnlyLabels: [] },
-    gittensorLabel: row.gittensorLabel,
-    blacklistLabel: row.blacklistLabel,
-    createMissingLabel: row.createMissingLabel,
+    gittensorLabel: "gittensor",
+    blacklistLabel: "slop",
+    createMissingLabel: true,
     // Config-as-code only (Batch A, loopover#6442): see the comment on the reviewCheckMode block above.
     publicSurface: "comment_and_label",
     includeMaintainerAuthors: false,
@@ -706,7 +710,7 @@ export async function getRepositorySettings(env: Env, fullName: string): Promise
     agentPaused: row.agentPaused,
     agentDryRun: row.agentDryRun,
     commandAuthorization: parseCommandAuthorizationPolicy(row.commandAuthorizationJson),
-    contributorBlacklist: parseContributorBlacklist(row.contributorBlacklistJson),
+    contributorBlacklist: [],
     autonomy: parseAutonomyPolicy(row.autonomyJson),
     autoMaintain: parseAutoMaintainPolicy(row.autoMaintainJson),
     contributorOpenPrCap: normalizeOpenItemCap(row.contributorOpenPrCap),
@@ -726,16 +730,17 @@ export async function getRepositorySettings(env: Env, fullName: string): Promise
     commandRateLimitMaxPerWindow: normalizePositiveIntWithDefault(row.commandRateLimitMaxPerWindow, 20),
     commandRateLimitAiMaxPerWindow: normalizePositiveIntWithDefault(row.commandRateLimitAiMaxPerWindow, 5),
     commandRateLimitWindowHours: normalizePositiveIntWithDefault(row.commandRateLimitWindowHours, 24),
-    moderationGateMode: normalizeModerationGateMode(row.moderationGateMode),
-    moderationRules: parseModerationRulesColumn(row.moderationRulesJson),
-    moderationWarningLabel: normalizeModerationLabel(row.moderationWarningLabel),
-    moderationBannedLabel: normalizeModerationLabel(row.moderationBannedLabel),
+    // Config-as-code only (Batch B, loopover#6443): see the comment on the typeLabelsEnabled block above.
+    moderationGateMode: "inherit",
+    moderationRules: undefined,
+    moderationWarningLabel: undefined,
+    moderationBannedLabel: undefined,
     skipAutomationBotAuthors: normalizeSkipAutomationBotAuthors(row.skipAutomationBotAuthors),
-    reviewEvasionProtection: normalizeReviewEvasionProtection(row.reviewEvasionProtection),
-    reviewEvasionLabel: row.reviewEvasionLabel,
-    reviewEvasionComment: row.reviewEvasionComment,
+    reviewEvasionProtection: "close", // #4011/#6443: default-ON, always -- a repo protects itself from self-close/draft-dodge gaming unless it explicitly opts out via .loopover.yml
+    reviewEvasionLabel: DEFAULT_REVIEW_EVASION_LABEL,
+    reviewEvasionComment: true,
     draftPrClosePolicy: normalizeDraftPrClosePolicy(row.draftPrClosePolicy),
-    mergeTrainMode: normalizeMergeTrainMode(row.mergeTrainMode),
+    mergeTrainMode: "off",
     screenshotTableGate: parseScreenshotTableGateRow(row),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
@@ -811,12 +816,15 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
     aiReviewLowConfidenceDisposition: parseAiReviewLowConfidenceDisposition(settings.aiReviewLowConfidenceDisposition),
     closeOwnerAuthors: settings.closeOwnerAuthors ?? false,
     autoLabelEnabled: settings.autoLabelEnabled ?? true,
-    typeLabelsEnabled: settings.typeLabelsEnabled ?? true,
-    typeLabels: normalizeTypeLabelSet(settings.typeLabels, []),
-    linkedIssueLabelPropagation: normalizeLinkedIssueLabelPropagationConfig(settings.linkedIssueLabelPropagation, []),
-    gittensorLabel: settings.gittensorLabel ?? "gittensor",
-    blacklistLabel: settings.blacklistLabel ?? "slop",
-    createMissingLabel: settings.createMissingLabel ?? true,
+    // Config-as-code only (Batch B, loopover#6443): hardcoded, not `settings.xxx ?? default`, so a caller
+    // passing one of these through this API is silently ignored rather than appearing to persist when
+    // there's no column to write it to.
+    typeLabelsEnabled: true,
+    typeLabels: { ...DEFAULT_TYPE_LABELS },
+    linkedIssueLabelPropagation: { ...DEFAULT_LINKED_ISSUE_LABEL_PROPAGATION, mappings: [] },
+    gittensorLabel: "gittensor",
+    blacklistLabel: "slop",
+    createMissingLabel: true,
     // Config-as-code only (Batch A, loopover#6442): see the comment on the reviewCheckMode block above.
     publicSurface: "comment_and_label",
     includeMaintainerAuthors: false,
@@ -827,7 +835,7 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
     agentPaused: settings.agentPaused ?? false,
     agentDryRun: settings.agentDryRun ?? false,
     commandAuthorization: normalizeCommandAuthorizationPolicy(settings.commandAuthorization).policy,
-    contributorBlacklist: normalizeContributorBlacklist(settings.contributorBlacklist).entries,
+    contributorBlacklist: [] as RepositorySettings["contributorBlacklist"],
     autonomy: normalizeAutonomyPolicy(settings.autonomy),
     autoMaintain: normalizeAutoMaintainPolicy(settings.autoMaintain),
     contributorOpenPrCap: normalizeOpenItemCap(settings.contributorOpenPrCap),
@@ -847,16 +855,17 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
     commandRateLimitMaxPerWindow: normalizePositiveIntWithDefault(settings.commandRateLimitMaxPerWindow, 20),
     commandRateLimitAiMaxPerWindow: normalizePositiveIntWithDefault(settings.commandRateLimitAiMaxPerWindow, 5),
     commandRateLimitWindowHours: normalizePositiveIntWithDefault(settings.commandRateLimitWindowHours, 24),
-    moderationGateMode: normalizeModerationGateMode(settings.moderationGateMode),
-    moderationRules: settings.moderationRules,
-    moderationWarningLabel: normalizeModerationLabel(settings.moderationWarningLabel),
-    moderationBannedLabel: normalizeModerationLabel(settings.moderationBannedLabel),
+    // Config-as-code only (Batch B, loopover#6443): see the comment on the typeLabelsEnabled block above.
+    moderationGateMode: "inherit" as const,
+    moderationRules: undefined,
+    moderationWarningLabel: undefined,
+    moderationBannedLabel: undefined,
     skipAutomationBotAuthors: normalizeSkipAutomationBotAuthors(settings.skipAutomationBotAuthors),
-    reviewEvasionProtection: normalizeReviewEvasionProtection(settings.reviewEvasionProtection),
-    reviewEvasionLabel: settings.reviewEvasionLabel ?? DEFAULT_REVIEW_EVASION_LABEL,
-    reviewEvasionComment: settings.reviewEvasionComment ?? true,
+    reviewEvasionProtection: "close" as const,
+    reviewEvasionLabel: DEFAULT_REVIEW_EVASION_LABEL,
+    reviewEvasionComment: true,
     draftPrClosePolicy: normalizeDraftPrClosePolicy(settings.draftPrClosePolicy),
-    mergeTrainMode: normalizeMergeTrainMode(settings.mergeTrainMode),
+    mergeTrainMode: "off" as const,
     screenshotTableGate: normalizeScreenshotTableGateConfig(settings.screenshotTableGate, []),
   } satisfies RepositorySettings;
   const db = getDb(env.DB);
@@ -888,19 +897,12 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
       aiReviewLowConfidenceDisposition: resolved.aiReviewLowConfidenceDisposition,
       closeOwnerAuthors: resolved.closeOwnerAuthors,
       autoLabelEnabled: resolved.autoLabelEnabled,
-      typeLabelsEnabled: resolved.typeLabelsEnabled,
-      typeLabelsJson: jsonString(resolved.typeLabels),
-      linkedIssueLabelPropagationJson: jsonString(resolved.linkedIssueLabelPropagation),
-      gittensorLabel: resolved.gittensorLabel,
-      blacklistLabel: resolved.blacklistLabel,
-      createMissingLabel: resolved.createMissingLabel,
       requireLinkedIssue: resolved.requireLinkedIssue,
       badgeEnabled: resolved.badgeEnabled,
       publicQualityMetrics: resolved.publicQualityMetrics,
       agentPaused: resolved.agentPaused,
       agentDryRun: resolved.agentDryRun,
       commandAuthorizationJson: jsonString(resolved.commandAuthorization),
-      contributorBlacklistJson: jsonString(resolved.contributorBlacklist),
       autonomyJson: jsonString(resolved.autonomy),
       autoMaintainJson: jsonString(resolved.autoMaintain),
       contributorOpenPrCap: resolved.contributorOpenPrCap,
@@ -920,16 +922,8 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
       commandRateLimitMaxPerWindow: resolved.commandRateLimitMaxPerWindow,
       commandRateLimitAiMaxPerWindow: resolved.commandRateLimitAiMaxPerWindow,
       commandRateLimitWindowHours: resolved.commandRateLimitWindowHours,
-      moderationGateMode: resolved.moderationGateMode,
-      moderationRulesJson: resolved.moderationRules === undefined ? null : jsonString(resolved.moderationRules),
-      moderationWarningLabel: resolved.moderationWarningLabel ?? null,
-      moderationBannedLabel: resolved.moderationBannedLabel ?? null,
       skipAutomationBotAuthors: resolved.skipAutomationBotAuthors,
-      reviewEvasionProtection: resolved.reviewEvasionProtection,
-      reviewEvasionLabel: resolved.reviewEvasionLabel,
-      reviewEvasionComment: resolved.reviewEvasionComment,
       draftPrClosePolicy: resolved.draftPrClosePolicy,
-      mergeTrainMode: resolved.mergeTrainMode,
       screenshotTableGateEnabled: resolved.screenshotTableGate.enabled,
       screenshotTableGateWhenLabelsJson: jsonString(resolved.screenshotTableGate.whenLabels),
       screenshotTableGateWhenPathsJson: jsonString(resolved.screenshotTableGate.whenPaths),
@@ -969,19 +963,12 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
         aiReviewLowConfidenceDisposition: resolved.aiReviewLowConfidenceDisposition,
         closeOwnerAuthors: resolved.closeOwnerAuthors,
         autoLabelEnabled: resolved.autoLabelEnabled,
-        typeLabelsEnabled: resolved.typeLabelsEnabled,
-        typeLabelsJson: jsonString(resolved.typeLabels),
-        linkedIssueLabelPropagationJson: jsonString(resolved.linkedIssueLabelPropagation),
-        gittensorLabel: resolved.gittensorLabel,
-        blacklistLabel: resolved.blacklistLabel,
-        createMissingLabel: resolved.createMissingLabel,
         requireLinkedIssue: resolved.requireLinkedIssue,
         badgeEnabled: resolved.badgeEnabled,
         publicQualityMetrics: resolved.publicQualityMetrics,
         agentPaused: resolved.agentPaused,
         agentDryRun: resolved.agentDryRun,
         commandAuthorizationJson: jsonString(resolved.commandAuthorization),
-        contributorBlacklistJson: jsonString(resolved.contributorBlacklist),
         autonomyJson: jsonString(resolved.autonomy),
         autoMaintainJson: jsonString(resolved.autoMaintain),
         contributorOpenPrCap: resolved.contributorOpenPrCap,
@@ -1001,16 +988,8 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
         commandRateLimitMaxPerWindow: resolved.commandRateLimitMaxPerWindow,
         commandRateLimitAiMaxPerWindow: resolved.commandRateLimitAiMaxPerWindow,
         commandRateLimitWindowHours: resolved.commandRateLimitWindowHours,
-        moderationGateMode: resolved.moderationGateMode,
-        moderationRulesJson: resolved.moderationRules === undefined ? null : jsonString(resolved.moderationRules),
-        moderationWarningLabel: resolved.moderationWarningLabel ?? null,
-        moderationBannedLabel: resolved.moderationBannedLabel ?? null,
         skipAutomationBotAuthors: resolved.skipAutomationBotAuthors,
-        reviewEvasionProtection: resolved.reviewEvasionProtection,
-        reviewEvasionLabel: resolved.reviewEvasionLabel,
-        reviewEvasionComment: resolved.reviewEvasionComment,
         draftPrClosePolicy: resolved.draftPrClosePolicy,
-        mergeTrainMode: resolved.mergeTrainMode,
         screenshotTableGateEnabled: resolved.screenshotTableGate.enabled,
         screenshotTableGateWhenLabelsJson: jsonString(resolved.screenshotTableGate.whenLabels),
         screenshotTableGateWhenPathsJson: jsonString(resolved.screenshotTableGate.whenPaths),
@@ -7816,14 +7795,6 @@ function parseCommandAuthorizationPolicy(value: string): RepositorySettings["com
   return normalizeCommandAuthorizationPolicy(parseJson<unknown>(value, null)).policy;
 }
 
-function parseTypeLabelSet(value: string): RepositorySettings["typeLabels"] {
-  return normalizeTypeLabelSet(parseJson<unknown>(value, null), []);
-}
-
-function parseLinkedIssueLabelPropagationConfig(value: string): RepositorySettings["linkedIssueLabelPropagation"] {
-  return normalizeLinkedIssueLabelPropagationConfig(parseJson<unknown>(value, null), []);
-}
-
 function parseContributorBlacklist(value: string): RepositorySettings["contributorBlacklist"] {
   return normalizeContributorBlacklist(parseJson<unknown>(value, null)).entries;
 }
@@ -7836,30 +7807,8 @@ function normalizeReviewNagPolicy(value: string | null | undefined): "off" | "ho
   return value === "hold" || value === "close" ? value : "off";
 }
 
-// Review-evasion protection (#review-evasion-protection): binary off|close, mirroring reviewNagPolicy's
-// shape minus the "hold" tier (an evasion attempt is always re-closed as the App when enabled, never merely
-// held -- there is no partial-enforcement mode).
-//
-// #4011: default-ON, the deliberate exception to every other field in this file defaulting conservatively
-// (off/false/advisory). A repo that hasn't discovered and explicitly set this field got ZERO self-close/
-// draft-dodge/repeated-cycling protection under the old "off" default -- a real, already-exploited gaming
-// vector (see loopover-ai-review-repeat-spend-and-draft-gaming-fix). Any value other than the explicit
-// opt-out "off" (including undefined/garbage) now resolves to "close": protected unless a repo deliberately
-// turns it off, not unprotected unless a repo discovers and turns it on. This is the ONLY reachable default
-// for this field -- the raw schema.ts column-level DEFAULT and the SQLite DDL default are never reached by
-// any live write path (upsertRepositorySettings always resolves and supplies an explicit value through this
-// exact function; see migration 0102's doc comment for the same lesson learned on a sibling field), so
-// changing them would have zero effect and was deliberately left alone.
-function normalizeReviewEvasionProtection(value: string | null | undefined): "off" | "close" {
-  return value === "off" ? "off" : "close";
-}
-
 function normalizeDraftPrClosePolicy(value: string | null | undefined): "off" | "close" {
   return value === "close" ? "close" : "off";
-}
-
-function normalizeMergeTrainMode(value: string | null | undefined): "off" | "audit" | "enforce" {
-  return value === "audit" || value === "enforce" ? value : "off";
 }
 
 // Config-driven before/after screenshot-table gate (#2006): the row stores whenLabels/whenPaths as JSON string
@@ -7892,21 +7841,8 @@ function normalizeCommandRateLimitPolicy(value: string | null | undefined): "off
   return value === "hold" ? value : "off";
 }
 
-function normalizeModerationGateMode(value: string | null | undefined): "inherit" | "off" | "enabled" {
-  return value === "off" || value === "enabled" ? value : "inherit";
-}
-
 function normalizeSkipAutomationBotAuthors(value: string | null | undefined): "inherit" | "off" | "enabled" {
   return value === "off" || value === "enabled" ? value : "inherit";
-}
-
-// NULL means "inherit the global rule set" (undefined), distinct from a normalized-but-empty list -- a repo
-// that explicitly configured an empty moderationRules override (opting every rule out) must stay empty, not
-// be coerced back to "inherit". Mirrors parseContributorBlacklist/parseAutoCloseExemptLogins's JSON-parse
-// shape, except the column itself (not just malformed JSON) can be genuinely absent.
-function parseModerationRulesColumn(value: string | null | undefined): RepositorySettings["moderationRules"] {
-  if (value === null || value === undefined) return undefined;
-  return normalizeModerationRules(parseJson<unknown>(value, null)).rules;
 }
 
 // A review-nag threshold/window is a discrete positive count, not a score — reuses the same non-clamping,

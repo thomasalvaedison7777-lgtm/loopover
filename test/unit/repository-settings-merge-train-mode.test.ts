@@ -1,54 +1,41 @@
 import { describe, expect, it } from "vitest";
 import { getRepositorySettings, upsertRepositorySettings } from "../../src/db/repositories";
+import { resolveRepositorySettings } from "../../src/settings/repository-settings";
+import { upsertRepoFocusManifest } from "../../src/signals/focus-manifest-loader";
 import { createTestEnv } from "../helpers/d1";
 
-// #selfhost-merge-train: mergeTrainMode ("off" | "audit" | "enforce") was added to the schema/type/openapi
-// layer but the INSERT and UPDATE column lists in upsertRepositorySettings never actually included it -- the
-// resolved value was computed correctly but silently never written, so setting it via the settings API/
-// dashboard (or any upsertRepositorySettings caller) was completely inert; the column stayed at its SQL
-// DEFAULT 'off' forever, on both a brand-new row (INSERT) and an existing one (UPDATE via onConflictDoUpdate).
-// Caught only by an integration-level merge-train test wired through the settings-resolution path, not by
-// the pure decision function's own unit tests (merge-train.test.ts), which never touch the DB at all.
-describe("repository_settings: mergeTrainMode persistence (#selfhost-merge-train)", () => {
+// #selfhost-merge-train: mergeTrainMode ("off" | "audit" | "enforce") moved off the DB entirely (Batch B,
+// config-as-code migration, loopover#6443) -- it's config-as-code only via .loopover.yml's settings: block
+// now. getRepositorySettings always resolves the conservative "off" default regardless of any DB write
+// (upsertRepositorySettings silently ignores a caller-supplied mergeTrainMode, and there is no longer a
+// column for a direct SQL write to land in); resolveRepositorySettings is the only path that honors an
+// explicit per-repo override, via the manifest overlay.
+describe("repository_settings: mergeTrainMode config-as-code (#selfhost-merge-train)", () => {
   it("getRepositorySettings returns off for a repo with no DB row at all (conservative default)", async () => {
     const env = createTestEnv();
     const settings = await getRepositorySettings(env, "acme/brand-new-repo");
     expect(settings.mergeTrainMode).toBe("off");
   });
 
-  it("REGRESSION: an explicit mergeTrainMode persists on the FIRST upsert (INSERT path)", async () => {
+  it("getRepositorySettings ignores a caller-supplied mergeTrainMode on upsert -- always off (no DB column to persist it in)", async () => {
     const env = createTestEnv();
     await upsertRepositorySettings(env, { repoFullName: "acme/fresh-insert", mergeTrainMode: "enforce" });
     const settings = await getRepositorySettings(env, "acme/fresh-insert");
+    expect(settings.mergeTrainMode).toBe("off");
+  });
+
+  it("resolveRepositorySettings honors an explicit mergeTrainMode from .loopover.yml's settings: block", async () => {
+    const env = createTestEnv();
+    await upsertRepositorySettings(env, { repoFullName: "acme/manifest-driven" });
+    await upsertRepoFocusManifest(env, "acme/manifest-driven", { settings: { mergeTrainMode: "enforce" } });
+    const settings = await resolveRepositorySettings(env, "acme/manifest-driven");
     expect(settings.mergeTrainMode).toBe("enforce");
   });
 
-  it("REGRESSION: an explicit mergeTrainMode persists on a SECOND upsert of an already-existing row (UPDATE path)", async () => {
+  it("resolveRepositorySettings falls back to off when no manifest override is present", async () => {
     const env = createTestEnv();
-    await upsertRepositorySettings(env, { repoFullName: "acme/existing-row" });
-    const before = await getRepositorySettings(env, "acme/existing-row");
-    expect(before.mergeTrainMode).toBe("off");
-
-    await upsertRepositorySettings(env, { repoFullName: "acme/existing-row", mergeTrainMode: "audit" });
-    const after = await getRepositorySettings(env, "acme/existing-row");
-    expect(after.mergeTrainMode).toBe("audit");
-  });
-
-  it("a true read-modify-write caller (spread current settings, then re-upsert) carries mergeTrainMode forward explicitly", async () => {
-    const env = createTestEnv();
-    await upsertRepositorySettings(env, { repoFullName: "acme/round-trip", mergeTrainMode: "enforce" });
-    const settings = await getRepositorySettings(env, "acme/round-trip");
-    expect(settings.mergeTrainMode).toBe("enforce");
-    await upsertRepositorySettings(env, { ...settings, repoFullName: "acme/round-trip" });
-    const after = await getRepositorySettings(env, "acme/round-trip");
-    expect(after.mergeTrainMode).toBe("enforce");
-  });
-
-  it("an invalid persisted DB value fails closed to off on read", async () => {
-    const env = createTestEnv();
-    await upsertRepositorySettings(env, { repoFullName: "acme/malformed" });
-    await env.DB.prepare("UPDATE repository_settings SET merge_train_mode = ? WHERE repo_full_name = ?").bind("sometimes", "acme/malformed").run();
-    const settings = await getRepositorySettings(env, "acme/malformed");
+    await upsertRepositorySettings(env, { repoFullName: "acme/no-manifest" });
+    const settings = await resolveRepositorySettings(env, "acme/no-manifest");
     expect(settings.mergeTrainMode).toBe("off");
   });
 });

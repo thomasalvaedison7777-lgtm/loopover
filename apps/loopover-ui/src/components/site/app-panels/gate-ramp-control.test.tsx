@@ -34,8 +34,6 @@ const ADVISORY_SETTINGS = {
   slopGateMinScore: null,
   slopAiAdvisory: false,
   autoLabelEnabled: true,
-  gittensorLabel: "gittensor",
-  createMissingLabel: true,
   requireLinkedIssue: false,
   badgeEnabled: false,
   publicQualityMetrics: false,
@@ -101,7 +99,8 @@ describe("GateRampControl (#2218)", () => {
     expect(body.linkedIssueGateMode).toBe("block");
     expect(body.duplicatePrGateMode).toBe("block");
     expect(body.qualityGateMode).toBe("block");
-    expect(body.gittensorLabel).toBe("gittensor");
+    // gittensorLabel moved off the dashboard (Batch B, loopover#6443) -- no longer in the PUT payload.
+    expect(body.gittensorLabel).toBeUndefined();
   });
 
   it("closes confirm without saving when cancel is clicked", async () => {
