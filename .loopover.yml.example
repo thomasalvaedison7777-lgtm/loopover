@@ -1078,6 +1078,19 @@ settings:
   #                                     # Default: review-evasion.
   # reviewEvasionComment: true         # Post the public explanation comment before the enforcement close. Default: true.
 
+  # Draft-PR close policy (#draft-pr-close-policy, anti-abuse): distinct from reviewEvasionProtection above --
+  # that family only enforces AFTER a review has already run against the PR's current head, or on the 2nd+
+  # ready<->draft conversion. "close" enforces on ANY draft, including the very first one opened directly as a
+  # draft or converted to draft before any review pass runs, closing it immediately -- stops a contributor
+  # farming bot labels/AI-review/CI feedback for free while never reaching a real one-shot disposition. OFF BY
+  # DEFAULT (opt-in, unlike reviewEvasionProtection's default-close): closing every draft PR is a much harsher
+  # posture than reviewEvasionProtection's narrower abuse-pattern detection and can catch ordinary
+  # WIP-signaling contributors, so choose this deliberately. Shares reviewEvasionLabel/reviewEvasionComment and
+  # autoCloseExemptLogins with the family above. Deliberately does NOT record a moderation strike (unlike
+  # reviewEvasionProtection) -- this is a blanket policy against ordinary GitHub draft usage, not a detected
+  # abuse pattern.
+  # draftPrClosePolicy: off  # off | close. Default: off.
+
   # Merge-train FIFO gate (#selfhost-merge-train): without this, a PR merges the instant its OWN gate clears,
   # with zero awareness of an older sibling PR still open in the same repo -- proven live to cause out-of-order
   # merges and the conflicts that follow. "audit" logs what the gate WOULD hold, without actually holding

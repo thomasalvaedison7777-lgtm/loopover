@@ -91,6 +91,11 @@ review:
 # review pass running, a prior recorded gate failure, or a repeated ready<->draft cycle on this PR, is
 # treated as dodging the one-shot review rather than an ordinary action (layered OVER the dashboard's
 # own default of "off").
+#
+# Draft-PR close policy: this repo's own CI capacity is shared across a steady stream of contributor PRs,
+# and draft PRs were being used to farm bot labels/AI-review/CI feedback for free without ever reaching a
+# real one-shot disposition -- close ANY draft immediately, including the first one, rather than waiting
+# for reviewEvasionProtection's narrower "already reviewed" or "repeated cycling" triggers above.
 settings:
   linkedIssueLabelPropagation:
     enabled: true
@@ -109,6 +114,7 @@ settings:
         removeOtherTypeLabels: false
         trustMaintainerAuthoredIssueForReward: true
   reviewEvasionProtection: close
+  draftPrClosePolicy: close
 
 # Repo-doc generation roadmap (#2993/#3002) — opt-in only, off by default. Uncomment to let LoopOver open a
 # PR generating AGENTS.md/CLAUDE.md from this repo's own profile.

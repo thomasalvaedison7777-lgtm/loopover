@@ -381,6 +381,7 @@ export { runCopycatAssessment, shouldCollectCopycatEvidence } from "./copycat-de
 // working.
 import {
   maybeCloseDraftDodgeAttempt,
+  maybeCloseDraftPr,
   maybeCloseRepeatedDraftCycling,
   maybeCloseReviewEvasionDraftConversion,
   maybeCloseReviewEvasionSelfClose,
@@ -5825,6 +5826,25 @@ async function handlePullRequestWebhookEvent(
     // active-review condition is normally already false.
     if (payload.action === "converted_to_draft" && installationId) {
       await maybeCloseReviewEvasionDraftConversion(
+        env,
+        deliveryId,
+        installationId,
+        repoFullName,
+        pr,
+        payload,
+        settings,
+      );
+    }
+    // Draft-PR close policy (#draft-pr-close-policy): opt-in, off by default -- distinct from the two review-
+    // evasion guards above, which only enforce once a review has already run against this head. Fires on
+    // EITHER trigger for a draft PR: opened directly as a draft, or converted to draft after opening --
+    // closing it before any review pass gets a chance to run at all, so a contributor can't farm bot labels/
+    // AI-review/CI feedback from a PR that never reaches a real one-shot disposition. Placed after both
+    // review-evasion draft guards above so a PR already closed by either of them fails this guard's own
+    // freshness re-check instead of being redundantly re-closed (same ordering rationale as the
+    // repeated-cycling guard below).
+    if ((payload.action === "opened" || payload.action === "converted_to_draft") && installationId && pr.isDraft) {
+      await maybeCloseDraftPr(
         env,
         deliveryId,
         installationId,

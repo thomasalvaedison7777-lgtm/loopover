@@ -176,6 +176,10 @@ export const repositorySettings = sqliteTable("repository_settings", {
   reviewEvasionProtection: text("review_evasion_protection").notNull().default("off"),
   reviewEvasionLabel: text("review_evasion_label").notNull().default("review-evasion"),
   reviewEvasionComment: integer("review_evasion_comment", { mode: "boolean" }).notNull().default(true),
+  // Draft-PR close policy (#draft-pr-close-policy): off by default -- unlike reviewEvasionProtection above,
+  // this enforces on ANY draft (including the first one, before a review has run), so a maintainer opts in
+  // deliberately rather than getting it on by default.
+  draftPrClosePolicy: text("draft_pr_close_policy").notNull().default("off"),
   // Merge-train FIFO gate (#selfhost-merge-train): off by default, same "opt-in, no surprise behavior change"
   // shape as reviewEvasionProtection above.
   mergeTrainMode: text("merge_train_mode").notNull().default("off"),

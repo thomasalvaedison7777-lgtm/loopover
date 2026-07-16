@@ -1251,6 +1251,19 @@ export type RepositorySettings = {
    *  repo re-enabling `"close"` (or removing an `"off"` override, which now also resolves to `"close"`) can
    *  immediately treat a historical off-period cycle as "repeated" on the very next legitimate conversion. */
   reviewEvasionProtection?: "off" | "close" | undefined;
+  /** Draft-PR close policy (#draft-pr-close-policy): distinct from {@link reviewEvasionProtection} above --
+   *  that family only enforces AFTER a review has already run against the PR's current head, or on the 2nd+
+   *  ready&harr;draft conversion. `"close"` enforces on ANY draft, including the very first one opened
+   *  directly as a draft or converted to draft before any review pass runs, closing it immediately to stop a
+   *  contributor from farming bot labels/AI-review/CI feedback for free while never reaching a real one-shot
+   *  disposition. `"off"` (the default) is unchanged behavior -- unlike `reviewEvasionProtection`, this is
+   *  opt-in, not default-on, since immediately closing every draft PR is a much harsher posture than
+   *  reviewEvasionProtection's narrower abuse-pattern detection and can catch ordinary WIP-signaling
+   *  contributors, so a maintainer should choose it deliberately. Shares `autoCloseExemptLogins` and
+   *  `reviewEvasionLabel`/`reviewEvasionComment` with the `reviewEvasionProtection` family (same anti-abuse
+   *  label/comment conventions, no need for separate config). See `queue/review-evasion.ts`'s
+   *  `maybeCloseDraftPr`. */
+  draftPrClosePolicy?: "off" | "close" | undefined;
   /** Merge-train FIFO gate (#selfhost-merge-train): without this, a PR merges the instant its OWN gate
    *  clears, with zero awareness of an older sibling PR still open in the same repo -- proven live to cause
    *  out-of-order merges and the conflicts that follow. `"off"` (the default) is unchanged behavior.

@@ -3472,6 +3472,123 @@ describe("review-evasion protection (#review-evasion-protection)", () => {
       expect(await repositoriesModule.bumpPullRequestDraftConversionCount(env, "JSONbored/gittensory", 999999)).toBe(0);
     });
   });
+
+  describe("draft-PR close policy (#draft-pr-close-policy)", () => {
+    function draftOpenedPayload(author: string, headSha = "abc123"): any {
+      return {
+        action: "opened",
+        installation: { id: 123 },
+        repository: { id: 1, name: "gittensory", full_name: "JSONbored/gittensory", private: false, default_branch: "main", owner: { login: "JSONbored" } },
+        sender: { login: author, type: "User" },
+        pull_request: {
+          id: 4242,
+          number: 42,
+          state: "open",
+          title: "Some PR",
+          body: "Body.",
+          user: { login: author },
+          head: { sha: headSha, ref: "fix", repo: { full_name: `${author}/gittensory`, owner: { login: author } } },
+          base: { sha: "base123", ref: "main", repo: { full_name: "JSONbored/gittensory", owner: { login: "JSONbored" } } },
+          draft: true,
+          merged: false,
+          mergeable_state: "clean",
+          created_at: "2026-05-27T00:00:00Z",
+          updated_at: "2026-05-27T00:00:00Z",
+        },
+      };
+    }
+
+    it("does nothing when draftPrClosePolicy is off (the default) -- opening directly as a draft is unaffected", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls);
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+      await setupEvasionRepo(env, { reviewEvasionProtection: "off" }); // draftPrClosePolicy defaults to "off"
+
+      await processJob(env, { type: "github-webhook", deliveryId: "draft-policy-off-opened", eventName: "pull_request", payload: draftOpenedPayload("contributor") });
+
+      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
+    });
+
+    it("closes immediately when a PR is opened directly as a draft -- no prior review needed, unlike reviewEvasionProtection", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls);
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+      await setupEvasionRepo(env, { reviewEvasionProtection: "off", draftPrClosePolicy: "close" });
+      // Deliberately no startActiveReviewTracking / recordGateBlockOutcome call -- unlike every reviewEvasionProtection
+      // sibling, this policy fires on the very first draft, before any review has ever run.
+
+      await processJob(env, { type: "github-webhook", deliveryId: "draft-policy-opened", eventName: "pull_request", payload: draftOpenedPayload("contributor") });
+
+      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(true);
+      expect(calls.some((c) => c.method === "POST" && c.url.endsWith("/issues/42/comments"))).toBe(true);
+      const audit = await env.DB.prepare("select outcome, detail from audit_events where event_type = ?").bind("github_app.draft_pr_closed").first<{ outcome: string; detail: string }>();
+      expect(audit?.outcome).toBe("completed");
+      expect(audit?.detail).toContain("contributor");
+    });
+
+    it("closes immediately when the author converts their own PR to draft", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls);
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+      await setupEvasionRepo(env, { reviewEvasionProtection: "off", draftPrClosePolicy: "close" });
+
+      await processJob(env, { type: "github-webhook", deliveryId: "draft-policy-converted", eventName: "pull_request", payload: draftEvasionPayload("contributor") });
+
+      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(true);
+      const audit = await env.DB.prepare("select outcome from audit_events where event_type = ?").bind("github_app.draft_pr_closed").first<{ outcome: string }>();
+      expect(audit?.outcome).toBe("completed");
+    });
+
+    it("does NOT record a moderation strike -- this is a blanket policy against ordinary draft usage, not a detected abuse pattern", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls);
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+      await setupEvasionRepo(env, { reviewEvasionProtection: "off", draftPrClosePolicy: "close" });
+      await repositoriesModule.upsertGlobalModerationConfig(env, { enabled: true, rules: ["review_evasion"] });
+
+      await processJob(env, { type: "github-webhook", deliveryId: "draft-policy-no-strike", eventName: "pull_request", payload: draftOpenedPayload("contributor") });
+
+      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(true);
+      const strike = await env.DB.prepare("select count(*) as n from audit_events where event_type = ?").bind("moderation.violation.review_evasion").first<{ n: number }>();
+      expect(strike?.n).toBe(0);
+    });
+
+    it("honors settings.autoCloseExemptLogins -- the shared allowlist the review-evasion family already uses", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls);
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+      await setupEvasionRepo(env, { reviewEvasionProtection: "off", draftPrClosePolicy: "close", autoCloseExemptLogins: ["contributor"] });
+
+      await processJob(env, { type: "github-webhook", deliveryId: "draft-policy-exempt", eventName: "pull_request", payload: draftOpenedPayload("contributor") });
+
+      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
+    });
+
+    it("does nothing when the author holds write collaborator permission", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls, { collaboratorPermission: "write" });
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+      await setupEvasionRepo(env, { reviewEvasionProtection: "off", draftPrClosePolicy: "close" });
+
+      await processJob(env, { type: "github-webhook", deliveryId: "draft-policy-maintainer", eventName: "pull_request", payload: draftOpenedPayload("write-collaborator") });
+
+      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
+    });
+
+    it("does nothing when a THIRD PARTY converts someone else's PR to draft -- an ordinary maintainer action, not the author's own choice", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls, { collaboratorPermission: "write" });
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+      await setupEvasionRepo(env, { reviewEvasionProtection: "off", draftPrClosePolicy: "close" });
+
+      const payload = draftEvasionPayload("contributor");
+      payload.sender = { login: "a-maintainer", type: "User" };
+
+      await processJob(env, { type: "github-webhook", deliveryId: "draft-policy-third-party", eventName: "pull_request", payload });
+
+      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
+    });
+  });
 });
 
 describe("markPullRequestLinkedIssueHardRuleViolated (#linked-issue-hard-rule-persistence)", () => {

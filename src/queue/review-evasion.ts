@@ -519,6 +519,11 @@ async function recloseDisallowedReopenIfNeeded(
 // this family, mirroring github_app.draft_dodge_closed / github_app.reopen_reclosed.
 const REVIEW_EVASION_CLOSED_EVENT_TYPE = "github_app.review_evasion_closed";
 
+// Separate eventType from REVIEW_EVASION_CLOSED_EVENT_TYPE above (#draft-pr-close-policy): this is a blanket
+// repo POLICY enforced against ordinary, first-time draft usage, not a detected abuse PATTERN like the
+// review-evasion family -- keeping it a distinct audit category lets an operator query the two apart.
+const DRAFT_PR_CLOSED_EVENT_TYPE = "github_app.draft_pr_closed";
+
 // Whether `login` holds a maintainer-equivalent permission on repoFullName -- the owner, an ADMIN_GITHUB_LOGINS
 // entry, or a collaborator with admin/maintain/write access. Shared by both review-evasion guards below;
 // mirrors recloseDisallowedReopenIfNeeded's identical `hasMaintainerPermission` closure (kept as a standalone
@@ -1081,4 +1086,139 @@ async function closeRepeatedDraftCyclingIfDetected(
       () => undefined,
     );
   }
+}
+
+/** Draft-PR close policy (#draft-pr-close-policy): distinct from the four review-evasion guards above, which
+ *  all key off a review having ALREADY run (an active pass, a prior recorded gate failure, or a repeated
+ *  2nd+ cycle) -- this guard enforces on ANY draft, including the very first one, opened directly as a draft
+ *  or converted to draft before a review has had any chance to run at all. The abuse pattern this closes is a
+ *  contributor farming bot labels/AI-review/CI feedback from a PR that never reaches a real one-shot
+ *  disposition. Off by default (`settings.draftPrClosePolicy !== "close"` bails immediately) -- unlike
+ *  reviewEvasionProtection's default-close, this is opt-in: it can catch ordinary, legitimate WIP-signaling
+ *  contributors who simply open (or convert to) a draft with no abusive intent, so a maintainer chooses it
+ *  deliberately for a specific repo rather than getting it for free. Deliberately does NOT record a
+ *  moderation strike (unlike the review-evasion siblings) -- this is a blanket repo policy applied to
+ *  ordinary GitHub draft usage, not a detected abuse pattern, so it would be unfair to count it toward a
+ *  contributor's ban threshold. Only the PR's OWN author opening/converting their OWN PR to draft is a
+ *  candidate (mirrors the review-evasion siblings' identical actor check) -- a maintainer opening a draft on
+ *  a contributor's behalf, or converting someone else's PR to draft, is an ordinary maintainer action.
+ *  Per-PR actuation-locked like its siblings. */
+export async function maybeCloseDraftPr(
+  env: Env,
+  deliveryId: string,
+  installationId: number,
+  repoFullName: string,
+  pr: PullRequestRecord,
+  payload: GitHubWebhookPayload,
+  settings: RepositorySettings,
+): Promise<void> {
+  if (settings.draftPrClosePolicy !== "close") return;
+  await withPrActuationLock(env, repoFullName, pr.number, "draft-pr-close-policy", () =>
+    closeDraftPrIfPolicyEnabled(env, deliveryId, installationId, repoFullName, pr, payload, settings),
+  );
+}
+
+async function closeDraftPrIfPolicyEnabled(
+  env: Env,
+  deliveryId: string,
+  installationId: number,
+  repoFullName: string,
+  pr: PullRequestRecord,
+  payload: GitHubWebhookPayload,
+  settings: RepositorySettings,
+): Promise<void> {
+  if (!pr.isDraft) return;
+  const actorLogin = (payload.sender?.login ?? "").toLowerCase();
+  const authorLogin = (pr.authorLogin ?? "").toLowerCase();
+  if (!actorLogin || !authorLogin || actorLogin !== authorLogin) return;
+  if (isProtectedAutomationAuthor(pr.authorLogin)) return;
+  if (isAutoCloseExempt(pr.authorLogin, settings.autoCloseExemptLogins)) return;
+  if (!pr.headSha) return;
+  const headSha = pr.headSha;
+  if (await hasMaintainerOrOwnerPermission(env, installationId, repoFullName, authorLogin)) return;
+
+  const targetKey = `${repoFullName}#${pr.number}`;
+  const gateMetadata = { deliveryId, repoFullName, headSha };
+  const gate = await evaluateCloseEnforcementGate({
+    env,
+    installationId,
+    repoFullName,
+    pr,
+    settings,
+    eventType: DRAFT_PR_CLOSED_EVENT_TYPE,
+    targetKey,
+    actionLabel: "draft-PR close policy",
+    actor: String(pr.authorLogin),
+    metadata: gateMetadata,
+    dryRun: {
+      detail: `dry-run: would close draft PR opened/converted by ${pr.authorLogin}`,
+      metadata: { ...gateMetadata, mode: "dry_run" },
+    },
+    paused: {
+      detail: `agent actions paused -- draft-PR close policy not enforced for ${pr.authorLogin}`,
+      metadata: gateMetadata,
+    },
+    permissionReadiness: {
+      detail: `denied draft-PR close for ${pr.authorLogin} -- pull_requests: write not granted`,
+      metadata: gateMetadata,
+    },
+    freshness: {
+      // requireDraft: the justification evaporates if the author marked the PR ready again in the window
+      // between ingestion and this check, mirroring the review-evasion siblings' identical fix (#2130).
+      requireDraft: true,
+      detailSuffix: " -- draft-PR close not executed",
+      metadata: gateMetadata,
+    },
+  });
+  if (!gate.proceed) return;
+
+  const closeError = await closePullRequest(env, installationId, repoFullName, pr.number)
+    .then(() => null)
+    .catch((error: unknown) => error);
+  if (closeError !== null) {
+    await recordAuditEvent(env, {
+      eventType: DRAFT_PR_CLOSED_EVENT_TYPE,
+      actor: "loopover",
+      targetKey,
+      outcome: "error",
+      detail: `FAILED to close draft PR by ${pr.authorLogin} -- the close API call did not succeed; the PR may still be open`,
+      metadata: { ...gateMetadata, error: errorMessage(closeError) },
+    }).catch(
+      /* v8 ignore next -- fail-safe: an audit write failure never blocks the handler. */
+      () => undefined,
+    );
+    return;
+  }
+
+  const shouldPostComment = settings.reviewEvasionComment ?? true;
+  if (shouldPostComment) {
+    await createIssueComment(
+      env,
+      installationId,
+      repoFullName,
+      pr.number,
+      "This repository closes pull requests automatically while they're in draft, to keep CI capacity and review bandwidth available for work that's ready to review. Reopen (or open a fresh pull request) once your changes are ready — LoopOver will pick it up from there.",
+    ).catch(
+      /* v8 ignore next -- fail-safe: a courtesy-comment failure never blocks the handler. */
+      () => undefined,
+    );
+  }
+  const label = resolveNullableLabel(settings.reviewEvasionLabel, DEFAULT_REVIEW_EVASION_LABEL);
+  if (label !== null) {
+    /* v8 ignore next -- fail-safe: a label-application failure never blocks the handler (the enforcement close already happened). */
+    await ensurePullRequestLabel(env, installationId, repoFullName, pr.number, label, { createMissingLabel: true }).catch(() => undefined);
+  }
+  await recordAuditEvent(env, {
+    eventType: DRAFT_PR_CLOSED_EVENT_TYPE,
+    actor: "loopover",
+    targetKey,
+    outcome: "completed",
+    detail: `closed draft PR by ${pr.authorLogin} -- draftPrClosePolicy is "close"`,
+    metadata: gateMetadata,
+  }).catch(
+    /* v8 ignore next -- fail-safe: an audit write failure never blocks the handler. */
+    () => undefined,
+  );
+  /* v8 ignore next -- best-effort: the guarded CAS update never rejects against a healthy D1, and a cleanup failure here must never block the webhook. */
+  await terminalizeActiveReviewTracking(env, repoFullName, pr.number, { onlyIfHeadSha: pr.headSha }).catch(() => undefined);
 }

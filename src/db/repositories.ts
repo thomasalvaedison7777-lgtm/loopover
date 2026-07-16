@@ -640,6 +640,7 @@ export async function getRepositorySettings(env: Env, fullName: string): Promise
       reviewEvasionProtection: "close", // #4011: default-ON -- see normalizeReviewEvasionProtection's doc comment
       reviewEvasionLabel: DEFAULT_REVIEW_EVASION_LABEL,
       reviewEvasionComment: true,
+      draftPrClosePolicy: "off",
       mergeTrainMode: "off",
       screenshotTableGate: { ...DEFAULT_SCREENSHOT_TABLE_GATE, whenLabels: [], whenPaths: [], requireViewports: [], requireThemes: [] },
     };
@@ -720,6 +721,7 @@ export async function getRepositorySettings(env: Env, fullName: string): Promise
     reviewEvasionProtection: normalizeReviewEvasionProtection(row.reviewEvasionProtection),
     reviewEvasionLabel: row.reviewEvasionLabel,
     reviewEvasionComment: row.reviewEvasionComment,
+    draftPrClosePolicy: normalizeDraftPrClosePolicy(row.draftPrClosePolicy),
     mergeTrainMode: normalizeMergeTrainMode(row.mergeTrainMode),
     screenshotTableGate: parseScreenshotTableGateRow(row),
     createdAt: row.createdAt,
@@ -835,6 +837,7 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
     reviewEvasionProtection: normalizeReviewEvasionProtection(settings.reviewEvasionProtection),
     reviewEvasionLabel: settings.reviewEvasionLabel ?? DEFAULT_REVIEW_EVASION_LABEL,
     reviewEvasionComment: settings.reviewEvasionComment ?? true,
+    draftPrClosePolicy: normalizeDraftPrClosePolicy(settings.draftPrClosePolicy),
     mergeTrainMode: normalizeMergeTrainMode(settings.mergeTrainMode),
     screenshotTableGate: normalizeScreenshotTableGateConfig(settings.screenshotTableGate, []),
   } satisfies RepositorySettings;
@@ -916,6 +919,7 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
       reviewEvasionProtection: resolved.reviewEvasionProtection,
       reviewEvasionLabel: resolved.reviewEvasionLabel,
       reviewEvasionComment: resolved.reviewEvasionComment,
+      draftPrClosePolicy: resolved.draftPrClosePolicy,
       mergeTrainMode: resolved.mergeTrainMode,
       screenshotTableGateEnabled: resolved.screenshotTableGate.enabled,
       screenshotTableGateWhenLabelsJson: jsonString(resolved.screenshotTableGate.whenLabels),
@@ -1005,6 +1009,7 @@ export async function upsertRepositorySettings(env: Env, settings: Partial<Repos
         reviewEvasionProtection: resolved.reviewEvasionProtection,
         reviewEvasionLabel: resolved.reviewEvasionLabel,
         reviewEvasionComment: resolved.reviewEvasionComment,
+        draftPrClosePolicy: resolved.draftPrClosePolicy,
         mergeTrainMode: resolved.mergeTrainMode,
         screenshotTableGateEnabled: resolved.screenshotTableGate.enabled,
         screenshotTableGateWhenLabelsJson: jsonString(resolved.screenshotTableGate.whenLabels),
@@ -7815,6 +7820,10 @@ function normalizeReviewNagPolicy(value: string | null | undefined): "off" | "ho
 // changing them would have zero effect and was deliberately left alone.
 function normalizeReviewEvasionProtection(value: string | null | undefined): "off" | "close" {
   return value === "off" ? "off" : "close";
+}
+
+function normalizeDraftPrClosePolicy(value: string | null | undefined): "off" | "close" {
+  return value === "close" ? "close" : "off";
 }
 
 function normalizeMergeTrainMode(value: string | null | undefined): "off" | "audit" | "enforce" {

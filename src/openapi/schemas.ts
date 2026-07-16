@@ -858,6 +858,12 @@ export const RepositorySettingsSchema = z
       ),
     reviewEvasionLabel: z.string().nullable().optional(),
     reviewEvasionComment: z.boolean().optional(),
+    draftPrClosePolicy: z
+      .enum(["off", "close"])
+      .optional()
+      .describe(
+        "Off by default (opt-in, unlike reviewEvasionProtection's default-close). \"close\" enforces on ANY draft PR, including the very first one, before a review pass has had a chance to run -- distinct from reviewEvasionProtection's family, which only enforces after a review already ran or on the 2nd+ draft conversion.",
+      ),
     mergeTrainMode: z.enum(["off", "audit", "enforce"]).optional(),
     screenshotTableGate: z
       .object({

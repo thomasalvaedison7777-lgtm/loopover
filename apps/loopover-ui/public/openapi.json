@@ -9689,6 +9689,14 @@
               "off",
               "enabled"
             ]
+          },
+          "draftPrClosePolicy": {
+            "type": "string",
+            "enum": [
+              "off",
+              "close"
+            ],
+            "description": "Off by default (opt-in, unlike reviewEvasionProtection's default-close). \"close\" enforces on ANY draft PR, including the very first one, before a review pass has had a chance to run -- distinct from reviewEvasionProtection's family, which only enforces after a review already ran or on the 2nd+ draft conversion."
           }
         },
         "required": [
