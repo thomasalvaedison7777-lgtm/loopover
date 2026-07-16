@@ -6135,8 +6135,10 @@ describe("queue processors", () => {
     ).resolves.toBeUndefined();
 
     // gittensor context-label apply (fails 403, recorded) + the best-effort type-label create attempt (also 403,
-    // swallowed). The context-label failure is still recorded below; the type label never drops the recording.
-    expect(calls).toEqual({ comments: 0, labels: 2 });
+    // swallowed). Each write path now uses withInstallationTokenRetry (#6191), so a permission-scope 403
+    // ("Resource not accessible by integration") remints once and retries — 2 writers × 2 attempts = 4 POSTs.
+    // The context-label failure is still recorded below; the type label never drops the recording.
+    expect(calls).toEqual({ comments: 0, labels: 4 });
     const outputFailure = await env.DB.prepare("select event_type, detail from audit_events where event_type = ?")
       .bind("github_app.pr_label_publish_failed")
       .first<{ event_type: string; detail: string }>();
