@@ -523,6 +523,20 @@ review:
   # null/true -- no change to today's agent-configured-repos-only behavior.
   # selftune: false
 
+  # Per-repo FORCE-OFF for the sweep-liveness watchdog cron pass (#6275) -- `false` excludes this repo from the
+  # watchdog's scan even though it's otherwise watched (convergence-allowlisted, or agent-configured with a real
+  # installation) and the operator's LOOPOVER_SWEEP_WATCHDOG flag is on. Deliberately FORCE-OFF-ONLY (no `true`
+  # override), mirroring `selftune` above: forcing a repo the watchdog wouldn't otherwise watch INTO the scan
+  # would bypass that separate repo-selection boundary. Bool or null. Default: null/true -- no change to today's
+  # watched-repo-set behavior.
+  # sweepWatchdog: false
+
+  # Per-repo FORCE-OFF for the fast open-PR reconciliation cron pass (#6275) -- `false` excludes this repo from
+  # the reconciliation scan even though it's otherwise watched and the operator's LOOPOVER_PR_RECONCILIATION
+  # flag is on. Deliberately FORCE-OFF-ONLY (no `true` override), mirroring `selftune`/`sweepWatchdog` above.
+  # Bool or null. Default: null/true -- no change to today's watched-repo-set behavior.
+  # prReconciliation: false
+
   # Repeat-false-positive suppression (#2179, part of #1964). Bool | null. Default: null/false — byte-identical
   # (no suppression-store read, no matching). Also requires the operator's LOOPOVER_REVIEW_MEMORY env flag to
   # be on -- this manifest field alone cannot enable it. When both are on, an advisory (non-blocking) AI finding

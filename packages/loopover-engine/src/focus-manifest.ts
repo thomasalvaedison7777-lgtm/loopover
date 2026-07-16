@@ -242,7 +242,11 @@ export type CopycatGateMode = "off" | "warn" | "label" | "block";
 // ALSO deliberately lives outside this block, as its own top-level `review.selftune` field below — it has no
 // `LOOPOVER_REVIEW_REPOS` allowlist to fall back to (its own repo scoping is `isAgentConfigured`, a
 // different consent boundary), so it doesn't fit this resolver's env-kill-switch → override → allowlist-
-// default shape; see `selfTuneRepos` in `review/selftune-wire.ts`. `e2eTests` (#4190, part of the #4189
+// default shape; see `selfTuneRepos` in `review/selftune-wire.ts`. `sweepWatchdog` and `prReconciliation`
+// (#6275) live outside this block for the identical reason: each is a FORCE-OFF-ONLY per-repo override on a
+// cron pass whose own repo-selection is the convergence allowlist union `isAgentConfigured` (mirroring
+// `selftune`'s shape one-for-one, just two separate cron passes instead of one) — see `watchedRepos` in
+// `review/sweep-watchdog.ts` and `review/pr-reconciliation.ts` respectively. `e2eTests` (#4190, part of the #4189
 // E2E-test-generation epic) fits this shape exactly as a plain symmetric override — unlike `safety`/
 // `grounding` it has no force-on-only or force-off-only floor/ceiling, since AI-generated test content
 // carries no security-hardening or full-file-fetch rationale to protect from a repo-controlled override.
@@ -583,6 +587,23 @@ export type FocusManifestReviewConfig = {
    *  `features:` block/`resolveConvergedFeature` (see `CONVERGED_FEATURE_KEYS`'s own comment). null/true
    *  (default, absent) ⇒ no change to today's agent-configured-repos-only behavior. */
   selftune: boolean | null;
+  /** `review.sweepWatchdog` (#6275): explicit per-repo FORCE-OFF for the sweep-liveness watchdog cron pass
+   *  (`runSweepLivenessWatchdog`, `src/review/sweep-watchdog.ts`) — `false` excludes this repo from the
+   *  watchdog's scan even though it's otherwise watched (convergence-allowlisted, or agent-configured with a
+   *  real installation) and the global `LOOPOVER_SWEEP_WATCHDOG` kill-switch is on. Deliberately
+   *  FORCE-OFF-ONLY (no `true` override), mirroring `selftune` immediately above: forcing a repo the watchdog
+   *  wouldn't otherwise watch INTO the scan would bypass that separate repo-selection boundary (the
+   *  convergence allowlist / `isAgentConfigured` consent), which this key must not touch. A manifest-load
+   *  error fails OPEN (the repo stays watched), matching the surrounding scan's existing settings-blip
+   *  fail-safe. null/true (default, absent) ⇒ no change to today's watched-repo-set behavior. */
+  sweepWatchdog: boolean | null;
+  /** `review.prReconciliation` (#6275): explicit per-repo FORCE-OFF for the fast open-PR reconciliation cron
+   *  pass (`runOpenPrReconciliation`, `src/review/pr-reconciliation.ts`) — `false` excludes this repo from
+   *  the reconciliation scan even though it's otherwise watched and the global `LOOPOVER_PR_RECONCILIATION`
+   *  kill-switch is on. Deliberately FORCE-OFF-ONLY (no `true` override), mirroring `selftune`/`sweepWatchdog`
+   *  above, for the identical reason. A manifest-load error fails OPEN (the repo stays watched). null/true
+   *  (default, absent) ⇒ no change to today's watched-repo-set behavior. */
+  prReconciliation: boolean | null;
   /** `review.memory` (#2179, config slice of #1964): when true, gates repeat-false-positive SUPPRESSION —
    *  before an advisory (non-blocking) AI finding is surfaced in the unified review comment, it is matched
    *  against this repo's stored `review_suppression` signals (a maintainer's own past false-positive
@@ -1084,7 +1105,7 @@ const EMPTY_MANIFEST: FocusManifest = {
   publicNotes: [],
   gate: { ...EMPTY_GATE_CONFIG },
   settings: {},
-  review: { present: false, footerText: null, note: null, fields: {}, enrichmentAnalyzers: {}, profile: null, tone: null, securityFocus: null, inlineComments: null, fixHandoff: null, autoMergeSummary: null, suggestions: null, changedFilesSummary: null, effortScore: null, impactMap: null, cultureProfile: null, selftune: null, reviewMemory: null, findingCategories: null, inlineCommentsPerCategory: null, minFindingSeverity: null, maxFindings: { ...EMPTY_MAX_FINDINGS_CONFIG }, commentVerbosity: null, e2eTestDelivery: null, e2eTestAutoTrigger: null, pathInstructions: [], instructions: null, excludePaths: [], pathFilters: [], preMergeChecks: [], autoReview: { ...EMPTY_AUTO_REVIEW_CONFIG }, aiModel: { ...EMPTY_SELF_HOST_AI_MODEL_CONFIG }, visual: { ...EMPTY_VISUAL_CONFIG }, linkedIssueSatisfaction: null, sharedConfigSource: null },
+  review: { present: false, footerText: null, note: null, fields: {}, enrichmentAnalyzers: {}, profile: null, tone: null, securityFocus: null, inlineComments: null, fixHandoff: null, autoMergeSummary: null, suggestions: null, changedFilesSummary: null, effortScore: null, impactMap: null, cultureProfile: null, selftune: null, sweepWatchdog: null, prReconciliation: null, reviewMemory: null, findingCategories: null, inlineCommentsPerCategory: null, minFindingSeverity: null, maxFindings: { ...EMPTY_MAX_FINDINGS_CONFIG }, commentVerbosity: null, e2eTestDelivery: null, e2eTestAutoTrigger: null, pathInstructions: [], instructions: null, excludePaths: [], pathFilters: [], preMergeChecks: [], autoReview: { ...EMPTY_AUTO_REVIEW_CONFIG }, aiModel: { ...EMPTY_SELF_HOST_AI_MODEL_CONFIG }, visual: { ...EMPTY_VISUAL_CONFIG }, linkedIssueSatisfaction: null, sharedConfigSource: null },
   features: { ...EMPTY_FEATURES_CONFIG },
   experimental: { ...EMPTY_EXPERIMENTAL_CONFIG },
   contentLane: { ...EMPTY_CONTENT_LANE_CONFIG },
@@ -1116,7 +1137,7 @@ function emptyManifest(source: FocusManifestSource, warnings: string[] = []): Fo
     warnings,
     gate: { ...EMPTY_GATE_CONFIG },
     settings: {},
-    review: { present: false, footerText: null, note: null, fields: {}, enrichmentAnalyzers: {}, profile: null, tone: null, securityFocus: null, inlineComments: null, fixHandoff: null, autoMergeSummary: null, suggestions: null, changedFilesSummary: null, effortScore: null, impactMap: null, cultureProfile: null, selftune: null, reviewMemory: null, findingCategories: null, inlineCommentsPerCategory: null, minFindingSeverity: null, maxFindings: { ...EMPTY_MAX_FINDINGS_CONFIG }, commentVerbosity: null, e2eTestDelivery: null, e2eTestAutoTrigger: null, pathInstructions: [], instructions: null, excludePaths: [], pathFilters: [], preMergeChecks: [], autoReview: { ...EMPTY_AUTO_REVIEW_CONFIG }, aiModel: { ...EMPTY_SELF_HOST_AI_MODEL_CONFIG }, visual: { ...EMPTY_VISUAL_CONFIG }, linkedIssueSatisfaction: null, sharedConfigSource: null },
+    review: { present: false, footerText: null, note: null, fields: {}, enrichmentAnalyzers: {}, profile: null, tone: null, securityFocus: null, inlineComments: null, fixHandoff: null, autoMergeSummary: null, suggestions: null, changedFilesSummary: null, effortScore: null, impactMap: null, cultureProfile: null, selftune: null, sweepWatchdog: null, prReconciliation: null, reviewMemory: null, findingCategories: null, inlineCommentsPerCategory: null, minFindingSeverity: null, maxFindings: { ...EMPTY_MAX_FINDINGS_CONFIG }, commentVerbosity: null, e2eTestDelivery: null, e2eTestAutoTrigger: null, pathInstructions: [], instructions: null, excludePaths: [], pathFilters: [], preMergeChecks: [], autoReview: { ...EMPTY_AUTO_REVIEW_CONFIG }, aiModel: { ...EMPTY_SELF_HOST_AI_MODEL_CONFIG }, visual: { ...EMPTY_VISUAL_CONFIG }, linkedIssueSatisfaction: null, sharedConfigSource: null },
     features: { ...EMPTY_FEATURES_CONFIG },
     experimental: { ...EMPTY_EXPERIMENTAL_CONFIG },
     contentLane: { ...EMPTY_CONTENT_LANE_CONFIG },
@@ -2309,7 +2330,7 @@ function parsePublicSafeText(value: JsonValue | undefined, field: string, warnin
  * throws; invalid/unsafe values are dropped with warnings.
  */
 function parseReviewConfig(value: JsonValue | undefined, warnings: string[]): FocusManifestReviewConfig {
-  const empty: FocusManifestReviewConfig = { present: false, footerText: null, note: null, fields: {}, enrichmentAnalyzers: {}, profile: null, tone: null, securityFocus: null, inlineComments: null, fixHandoff: null, autoMergeSummary: null, suggestions: null, changedFilesSummary: null, effortScore: null, impactMap: null, cultureProfile: null, selftune: null, reviewMemory: null, findingCategories: null, inlineCommentsPerCategory: null, minFindingSeverity: null, maxFindings: { ...EMPTY_MAX_FINDINGS_CONFIG }, commentVerbosity: null, e2eTestDelivery: null, e2eTestAutoTrigger: null, pathInstructions: [], instructions: null, excludePaths: [], pathFilters: [], preMergeChecks: [], autoReview: { ...EMPTY_AUTO_REVIEW_CONFIG }, aiModel: { ...EMPTY_SELF_HOST_AI_MODEL_CONFIG }, visual: { ...EMPTY_VISUAL_CONFIG }, linkedIssueSatisfaction: null, sharedConfigSource: null };
+  const empty: FocusManifestReviewConfig = { present: false, footerText: null, note: null, fields: {}, enrichmentAnalyzers: {}, profile: null, tone: null, securityFocus: null, inlineComments: null, fixHandoff: null, autoMergeSummary: null, suggestions: null, changedFilesSummary: null, effortScore: null, impactMap: null, cultureProfile: null, selftune: null, sweepWatchdog: null, prReconciliation: null, reviewMemory: null, findingCategories: null, inlineCommentsPerCategory: null, minFindingSeverity: null, maxFindings: { ...EMPTY_MAX_FINDINGS_CONFIG }, commentVerbosity: null, e2eTestDelivery: null, e2eTestAutoTrigger: null, pathInstructions: [], instructions: null, excludePaths: [], pathFilters: [], preMergeChecks: [], autoReview: { ...EMPTY_AUTO_REVIEW_CONFIG }, aiModel: { ...EMPTY_SELF_HOST_AI_MODEL_CONFIG }, visual: { ...EMPTY_VISUAL_CONFIG }, linkedIssueSatisfaction: null, sharedConfigSource: null };
   if (value === undefined || value === null) return empty;
   if (typeof value !== "object" || Array.isArray(value)) {
     warnings.push(`Manifest field "review" must be a mapping; ignoring it.`);
@@ -2354,6 +2375,8 @@ function parseReviewConfig(value: JsonValue | undefined, warnings: string[]): Fo
   const impactMap = normalizeOptionalBoolean(r.impact_map, "review.impact_map", warnings);
   const cultureProfile = normalizeOptionalBoolean(r.culture_profile, "review.culture_profile", warnings);
   const selftune = normalizeOptionalBoolean(r.selftune, "review.selftune", warnings);
+  const sweepWatchdog = normalizeOptionalBoolean(r.sweepWatchdog, "review.sweepWatchdog", warnings);
+  const prReconciliation = normalizeOptionalBoolean(r.prReconciliation, "review.prReconciliation", warnings);
   const reviewMemory = normalizeOptionalBoolean(r.memory, "review.memory", warnings);
   const findingCategories = normalizeOptionalBoolean(r.finding_categories, "review.finding_categories", warnings);
   const inlineCommentsPerCategory = normalizeOptionalNonNegativeInt(
@@ -2396,6 +2419,8 @@ function parseReviewConfig(value: JsonValue | undefined, warnings: string[]): Fo
       impactMap !== null ||
       cultureProfile !== null ||
       selftune !== null ||
+      sweepWatchdog !== null ||
+      prReconciliation !== null ||
       reviewMemory !== null ||
       findingCategories !== null ||
       inlineCommentsPerCategory !== null ||
@@ -2435,6 +2460,8 @@ function parseReviewConfig(value: JsonValue | undefined, warnings: string[]): Fo
     impactMap,
     cultureProfile,
     selftune,
+    sweepWatchdog,
+    prReconciliation,
     reviewMemory,
     findingCategories,
     inlineCommentsPerCategory,
@@ -2534,6 +2561,8 @@ function computeReviewConfigPresent(review: Omit<FocusManifestReviewConfig, "pre
     review.impactMap !== null ||
     review.cultureProfile !== null ||
     review.selftune !== null ||
+    review.sweepWatchdog !== null ||
+    review.prReconciliation !== null ||
     review.reviewMemory !== null ||
     review.findingCategories !== null ||
     review.inlineCommentsPerCategory !== null ||
@@ -2579,6 +2608,8 @@ export function overlayReviewConfig(
     impactMap: pickOverlayNullable(override.impactMap, base.impactMap),
     cultureProfile: pickOverlayNullable(override.cultureProfile, base.cultureProfile),
     selftune: pickOverlayNullable(override.selftune, base.selftune),
+    sweepWatchdog: pickOverlayNullable(override.sweepWatchdog, base.sweepWatchdog),
+    prReconciliation: pickOverlayNullable(override.prReconciliation, base.prReconciliation),
     reviewMemory: pickOverlayNullable(override.reviewMemory, base.reviewMemory),
     findingCategories: pickOverlayNullable(override.findingCategories, base.findingCategories),
     inlineCommentsPerCategory: pickOverlayNullable(override.inlineCommentsPerCategory, base.inlineCommentsPerCategory),
@@ -3057,6 +3088,8 @@ export function reviewConfigToJson(review: FocusManifestReviewConfig): JsonValue
   if (review.impactMap !== null) out.impact_map = review.impactMap;
   if (review.cultureProfile !== null) out.culture_profile = review.cultureProfile;
   if (review.selftune !== null) out.selftune = review.selftune;
+  if (review.sweepWatchdog !== null) out.sweepWatchdog = review.sweepWatchdog;
+  if (review.prReconciliation !== null) out.prReconciliation = review.prReconciliation;
   if (review.reviewMemory !== null) out.memory = review.reviewMemory;
   if (review.findingCategories !== null) out.finding_categories = review.findingCategories;
   if (review.inlineCommentsPerCategory !== null) out.inline_comments_per_category = review.inlineCommentsPerCategory;

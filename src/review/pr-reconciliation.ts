@@ -15,6 +15,7 @@ import { fetchLivePullRequest, reconcileOpenPullRequests } from "../github/backf
 import { getRepository, listRepositories, upsertPullRequestFromGitHub } from "../db/repositories";
 import { isAgentConfigured } from "../settings/autonomy";
 import { resolveRepositorySettings } from "../settings/repository-settings";
+import { loadRepoFocusManifest } from "../signals/focus-manifest-loader";
 import { incr } from "../selfhost/metrics";
 import type { JobMessage } from "../types";
 import { errorMessage } from "../utils/json";
@@ -27,7 +28,15 @@ export function isPrReconciliationEnabled(env: { LOOPOVER_PR_RECONCILIATION?: st
 }
 
 /** The same acting-autonomy repo set fanOutAgentRegateSweepJobs sweeps (mirrors sweep-watchdog.ts's own copy of
- *  this selection) — this reconciliation only makes sense for repos loopover is actually reviewing. */
+ *  this selection) — this reconciliation only makes sense for repos loopover is actually reviewing.
+ *
+ *  Per-repo opt-out (#6275): mirrors `selftune-wire.ts`'s `selfTuneRepos` FORCE-OFF-ONLY shape exactly -- an
+ *  explicit per-repo `.loopover.yml` `review.prReconciliation: false` excludes that one repo from the
+ *  reconciliation scan even though it's otherwise watched. There is no `true` override: forcing a repo the
+ *  scan wouldn't otherwise watch INTO it would bypass the separate convergence-allowlist / acting-autonomy
+ *  consent boundary above, which this key must not touch. Unset (the default) changes nothing. A
+ *  manifest-load error fails OPEN (the repo stays watched), matching the surrounding settings-blip fail-safe
+ *  below -- a config-read failure must never silently exclude a repo from monitoring. */
 async function watchedRepos(env: Env): Promise<Array<{ fullName: string; installationId?: number }>> {
   const repositoriesByKey = new Map((await listRepositories(env)).map((repo) => [repo.fullName.toLowerCase(), repo]));
   const byKey = new Map<string, { fullName: string; installationId?: number }>();
@@ -49,7 +58,11 @@ async function watchedRepos(env: Env): Promise<Array<{ fullName: string; install
       // otherwise inherit that default and look "agent-configured" purely by existing. Require a real
       // installation before the autonomy-based path counts; the explicit allowlist stays untouched.
       const hasInstallation = typeof repo.installationId === "number";
-      if (isConvergenceRepoAllowed(env, repo.fullName) || (hasInstallation && isAgentConfigured(settings.autonomy))) configured.push(repo);
+      const watched = isConvergenceRepoAllowed(env, repo.fullName) || (hasInstallation && isAgentConfigured(settings.autonomy));
+      if (!watched) continue;
+      const manifest = await loadRepoFocusManifest(env, repo.fullName).catch(() => null);
+      if (manifest?.review.prReconciliation === false) continue; // explicit per-repo opt-out (#6275)
+      configured.push(repo);
     } catch {
       /* a settings blip on one repo must not abort the whole reconciliation scan */
     }

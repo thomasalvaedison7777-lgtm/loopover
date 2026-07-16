@@ -4,6 +4,8 @@ import { getPullRequest, upsertRepositoryFromGitHub, upsertRepositorySettings } 
 import * as backfillModule from "../../src/github/backfill";
 import * as repositoriesModule from "../../src/db/repositories";
 import { counterValue, resetMetrics } from "../../src/selfhost/metrics";
+import { upsertRepoFocusManifest } from "../../src/signals/focus-manifest-loader";
+import * as focusManifestLoaderModule from "../../src/signals/focus-manifest-loader";
 import { createTestEnv } from "../helpers/d1";
 
 describe("isPrReconciliationEnabled — default OFF, truthy convention", () => {
@@ -153,5 +155,58 @@ describe("runOpenPrReconciliation (#audit-open-pr-reconciliation)", () => {
     await expect(runOpenPrReconciliation(env)).resolves.toEqual([{ repoFullName: "owner/send-fails", remoteOpenCount: 1, localOpenCount: 0, missingNumbers: [3] }]);
 
     expect(errors.mock.calls.some((call) => String(call[0]).includes("open_pr_reconciliation_catch_up_failed") && String(call[0]).includes("owner/send-fails"))).toBe(true);
+  });
+});
+
+describe("watchedRepos — per-repo review.prReconciliation FORCE-OFF (#6275)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("REGRESSION: an explicit review.prReconciliation: false excludes an otherwise-watched repo from the scan entirely", async () => {
+    const env = createTestEnv();
+    await upsertRepositoryFromGitHub(env, { name: "opted-out", full_name: "owner/opted-out", private: false, owner: { login: "owner" } }, 9410);
+    await upsertRepositorySettings(env, { repoFullName: "owner/opted-out", autonomy: { merge: "auto" } });
+    await upsertRepoFocusManifest(env, "owner/opted-out", { review: { prReconciliation: false } });
+    const reconcileSpy = vi.spyOn(backfillModule, "reconcileOpenPullRequests");
+
+    const found = await runOpenPrReconciliation(env);
+
+    expect(found).toEqual([]);
+    expect(reconcileSpy).not.toHaveBeenCalled();
+  });
+
+  it("an explicit review.prReconciliation: true is a no-op — the repo is watched exactly as when unset", async () => {
+    const env = createTestEnv();
+    await upsertRepositoryFromGitHub(env, { name: "opted-in", full_name: "owner/opted-in", private: false, owner: { login: "owner" } }, 9411);
+    await upsertRepositorySettings(env, { repoFullName: "owner/opted-in", autonomy: { merge: "auto" } });
+    await upsertRepoFocusManifest(env, "owner/opted-in", { review: { prReconciliation: true } });
+    const reconcileSpy = vi.spyOn(backfillModule, "reconcileOpenPullRequests").mockResolvedValueOnce({ repoFullName: "owner/opted-in", remoteOpenCount: 0, localOpenCount: 0, missingNumbers: [] });
+
+    await runOpenPrReconciliation(env);
+
+    expect(reconcileSpy).toHaveBeenCalledWith(env, "owner/opted-in");
+  });
+
+  it("fails OPEN on a manifest-load error — the repo stays watched (a config-read failure must never silently exclude it from monitoring)", async () => {
+    const env = createTestEnv();
+    await upsertRepositoryFromGitHub(env, { name: "manifest-errors", full_name: "owner/manifest-errors", private: false, owner: { login: "owner" } }, 9412);
+    await upsertRepositorySettings(env, { repoFullName: "owner/manifest-errors", autonomy: { merge: "auto" } });
+    // resolveRepositorySettings ALSO loads the manifest internally (settings resolution needs it too) -- let
+    // that first call succeed normally so this test isolates the SECOND, opt-out-check call (watchedRepos's
+    // own explicit loadRepoFocusManifest) as the one that fails.
+    const original = focusManifestLoaderModule.loadRepoFocusManifest;
+    let callCount = 0;
+    vi.spyOn(focusManifestLoaderModule, "loadRepoFocusManifest").mockImplementation(async (...args: Parameters<typeof original>) => {
+      callCount += 1;
+      if (callCount === 1) return original(...args);
+      throw new Error("manifest fetch failed");
+    });
+    const reconcileSpy = vi.spyOn(backfillModule, "reconcileOpenPullRequests").mockResolvedValueOnce({ repoFullName: "owner/manifest-errors", remoteOpenCount: 0, localOpenCount: 0, missingNumbers: [] });
+
+    await runOpenPrReconciliation(env);
+
+    expect(callCount).toBeGreaterThanOrEqual(2); // both the settings-resolution load AND the opt-out-check load ran
+    expect(reconcileSpy).toHaveBeenCalledWith(env, "owner/manifest-errors");
   });
 });

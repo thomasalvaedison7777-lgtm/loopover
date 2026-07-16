@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { isSweepStale, isSweepWatchdogEnabled, runSweepLivenessWatchdog, SWEEP_STALENESS_THRESHOLD_MS } from "../../src/review/sweep-watchdog";
 import { markPullRequestsRegated, upsertPullRequestFromGitHub, upsertRepositoryFromGitHub, upsertRepositorySettings } from "../../src/db/repositories";
 import * as repositoriesModule from "../../src/db/repositories";
+import { upsertRepoFocusManifest } from "../../src/signals/focus-manifest-loader";
+import * as focusManifestLoaderModule from "../../src/signals/focus-manifest-loader";
 import { createTestEnv } from "../helpers/d1";
 
 describe("isSweepWatchdogEnabled — default OFF, truthy convention", () => {
@@ -186,5 +188,63 @@ describe("runSweepLivenessWatchdog (#audit-sweep-fanout-isolation follow-up)", (
 
     await expect(runSweepLivenessWatchdog(env)).resolves.toEqual([expect.objectContaining({ repoFullName: "owner/send-fails" })]); // still reported as found even though the re-enqueue itself failed
     expect(errors.mock.calls.some((call) => String(call[0]).includes("sweep_liveness_reenqueue_failed") && String(call[0]).includes("owner/send-fails"))).toBe(true);
+  });
+});
+
+describe("watchedRepos — per-repo review.sweepWatchdog FORCE-OFF (#6275)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("REGRESSION: an explicit review.sweepWatchdog: false excludes an otherwise-watched, stale repo from the scan entirely", async () => {
+    const sent: import("../../src/types").JobMessage[] = [];
+    const env = createTestEnv({ JOBS: { async send(m: import("../../src/types").JobMessage) { sent.push(m); } } as unknown as Queue });
+    await upsertRepositoryFromGitHub(env, { name: "opted-out", full_name: "owner/opted-out", private: false, owner: { login: "owner" } }, 9309);
+    await upsertRepositorySettings(env, { repoFullName: "owner/opted-out", autonomy: { merge: "auto" } });
+    await upsertPullRequestFromGitHub(env, "owner/opted-out", { number: 1, title: "PR1", state: "open", user: { login: "c" }, head: { sha: "a1" }, labels: [], body: "" });
+    await upsertRepoFocusManifest(env, "owner/opted-out", { review: { sweepWatchdog: false } });
+
+    const found = await runSweepLivenessWatchdog(env);
+
+    expect(found).toEqual([]);
+    expect(sent).toEqual([]);
+  });
+
+  it("an explicit review.sweepWatchdog: true is a no-op — the repo is watched exactly as when unset", async () => {
+    const sent: import("../../src/types").JobMessage[] = [];
+    const env = createTestEnv({ JOBS: { async send(m: import("../../src/types").JobMessage) { sent.push(m); } } as unknown as Queue });
+    await upsertRepositoryFromGitHub(env, { name: "opted-in", full_name: "owner/opted-in", private: false, owner: { login: "owner" } }, 9310);
+    await upsertRepositorySettings(env, { repoFullName: "owner/opted-in", autonomy: { merge: "auto" } });
+    await upsertPullRequestFromGitHub(env, "owner/opted-in", { number: 1, title: "PR1", state: "open", user: { login: "c" }, head: { sha: "a1" }, labels: [], body: "" });
+    await upsertRepoFocusManifest(env, "owner/opted-in", { review: { sweepWatchdog: true } });
+
+    const found = await runSweepLivenessWatchdog(env);
+
+    expect(found).toEqual([expect.objectContaining({ repoFullName: "owner/opted-in" })]);
+    expect(sent).toEqual([expect.objectContaining({ repoFullName: "owner/opted-in" })]);
+  });
+
+  it("fails OPEN on a manifest-load error — the repo stays watched (a config-read failure must never silently exclude it from monitoring)", async () => {
+    const sent: import("../../src/types").JobMessage[] = [];
+    const env = createTestEnv({ JOBS: { async send(m: import("../../src/types").JobMessage) { sent.push(m); } } as unknown as Queue });
+    await upsertRepositoryFromGitHub(env, { name: "manifest-errors", full_name: "owner/manifest-errors", private: false, owner: { login: "owner" } }, 9311);
+    await upsertRepositorySettings(env, { repoFullName: "owner/manifest-errors", autonomy: { merge: "auto" } });
+    await upsertPullRequestFromGitHub(env, "owner/manifest-errors", { number: 1, title: "PR1", state: "open", user: { login: "c" }, head: { sha: "a1" }, labels: [], body: "" });
+    // resolveRepositorySettings ALSO loads the manifest internally (settings resolution needs it too) -- let
+    // that first call succeed normally so this test isolates the SECOND, opt-out-check call (watchedRepos's
+    // own explicit loadRepoFocusManifest) as the one that fails.
+    const original = focusManifestLoaderModule.loadRepoFocusManifest;
+    let callCount = 0;
+    vi.spyOn(focusManifestLoaderModule, "loadRepoFocusManifest").mockImplementation(async (...args: Parameters<typeof original>) => {
+      callCount += 1;
+      if (callCount === 1) return original(...args);
+      throw new Error("manifest fetch failed");
+    });
+
+    const found = await runSweepLivenessWatchdog(env);
+
+    expect(callCount).toBeGreaterThanOrEqual(2); // both the settings-resolution load AND the opt-out-check load ran
+    expect(found).toEqual([expect.objectContaining({ repoFullName: "owner/manifest-errors" })]);
+    expect(sent).toEqual([expect.objectContaining({ repoFullName: "owner/manifest-errors" })]);
   });
 });
