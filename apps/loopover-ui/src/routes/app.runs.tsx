@@ -5,6 +5,7 @@ import { AnimatePresence, motion } from "motion/react";
 import {
   ChevronLeft,
   ChevronRight,
+  Copy,
   Filter,
   Link2,
   RotateCw,
@@ -686,7 +687,9 @@ function RunDrawer({
   );
 }
 
-function DrawerSurface({
+// Exported for unit tests: the drawer body is only ever reached through the route's data-fetching
+// component, so mounting it directly is what lets its copy affordances be asserted without a router.
+export function DrawerSurface({
   run,
   filtered,
   onSelect,
@@ -710,6 +713,22 @@ function DrawerSurface({
       toast.success("Permalink copied", { description: url });
     } catch {
       toast.error("Couldn't copy permalink");
+    }
+  };
+
+  // Rendered into the <pre> below *and* handed to the clipboard, so the copied text can never drift
+  // from the text on screen.
+  const inputsJson = JSON.stringify(
+    { repo: run.repo, source: run.source, kind: run.kind },
+    null,
+    2,
+  );
+  const copyInputs = async () => {
+    try {
+      await navigator.clipboard.writeText(inputsJson);
+      toast.success("Inputs copied", { description: `${run.kind} inputs are ready to paste.` });
+    } catch {
+      toast.error("Couldn't copy inputs");
     }
   };
   const closeRef = useRef<HTMLButtonElement | null>(null);
@@ -813,11 +832,22 @@ function DrawerSurface({
         </div>
 
         <div>
-          <div className="font-mono text-token-2xs uppercase tracking-wider text-muted-foreground">
-            Inputs
+          <div className="flex items-center justify-between gap-2">
+            <div className="font-mono text-token-2xs uppercase tracking-wider text-muted-foreground">
+              Inputs
+            </div>
+            <button
+              type="button"
+              onClick={copyInputs}
+              aria-label="Copy inputs JSON"
+              className="inline-flex items-center justify-center gap-1.5 rounded-token border border-border px-2 py-1 text-token-2xs text-foreground/90 transition-colors hover:bg-accent focus-ring"
+            >
+              <Copy className="size-3" />
+              Copy
+            </button>
           </div>
           <pre className="mt-2 overflow-x-auto rounded-token border border-border bg-background/60 p-3 font-mono text-token-2xs text-foreground/90">
-            {JSON.stringify({ repo: run.repo, source: run.source, kind: run.kind }, null, 2)}
+            {inputsJson}
           </pre>
         </div>
 
