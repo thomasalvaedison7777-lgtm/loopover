@@ -158,6 +158,7 @@ import { handleMcpRequest } from "../mcp/server";
 import { buildOpenApiSpec } from "../openapi/spec";
 import { COMMAND_RATE_LIMIT_EVENT_TYPE, generateSignalSnapshots } from "../queue/processors";
 import { generateChatQaAnswer } from "../services/ai-chat-qa";
+import { isRepoChatQaEnabled, resolveChatQaActor, resolveChatQaGroundingLogin, resolveChatQaRateLimit } from "./maintainer-chat-qa";
 import { getLatestRegistrySnapshot, listLatestRegistrySnapshots, refreshRegistry } from "../registry/sync";
 import { getOrCreateScoringModelSnapshot, isTimeDecayEnabled, refreshScoringModelSnapshot } from "../scoring/model";
 import { buildScorePreview, makeScorePreviewRecord } from "../scoring/preview";
@@ -1438,8 +1439,7 @@ export function createApp() {
       // advisoryAiRouting is config-as-code only (never DB-writable, resolved from the repo's .loopover.yml
       // manifest, #6489) -- unlike every other field on previewSettingsByRepo above, so it needs the FULL
       // resolveRepositorySettings merge, not the raw getRepositorySettings row.
-      /* v8 ignore next -- both true/false arms are hit across unit+integration suites; codecov still marks optional-chain patch-partials across shards (same pattern as live-gate-thresholds). */
-      Promise.all(previewRepositories.map((repo) => resolveRepositorySettings(c.env, repo.fullName).then((settings) => [repo.fullName, settings.advisoryAiRouting?.chatQa === true] as const))),
+      Promise.all(previewRepositories.map((repo) => resolveRepositorySettings(c.env, repo.fullName).then((settings) => [repo.fullName, isRepoChatQaEnabled(settings)] as const))),
     ]);
     const previewSettingsByRepo = new Map(previewRepositorySettings);
     const previewChatQaEnabledByRepo = new Map(previewChatQaEnabled);
@@ -1524,8 +1524,7 @@ export function createApp() {
         // Whether this PR's repo has opted into the grounded @loopover chat Q&A surface (#6489) --
         // gates the maintainer panel's Chat Q&A section per PR so an instance that hasn't enabled it
         // sees no new UI for that PR, rather than a disabled-looking version of it.
-        /* v8 ignore next -- false covered by integration suite; true covered by unit stub; codecov patch-partial across shards. */
-        chatQaEnabled: previewChatQaEnabledByRepo.get(repoFullName) === true,
+        chatQaEnabled: previewChatQaEnabledByRepo.get(repoFullName) ?? false,
       })),
       settingsPreview: buildMaintainerSettingsPreview(),
       qualityDashboard: { ...qualityDashboard, gateOutcomeBreakdown },
@@ -2959,22 +2958,15 @@ export function createApp() {
     const [settings, pullRequest] = await Promise.all([resolveRepositorySettings(c.env, fullName), getPullRequest(c.env, fullName, number)]);
     if (!pullRequest) return c.json({ error: "pull_request_not_found" }, 404);
 
-    // requireRepoMaintainer always returns an identity on the success path for static/session tokens.
-    /* v8 ignore next -- identity is always set after a successful requireRepoMaintainer gate; nullish side is type-only. */
-    const actor = gate.identity?.actor ?? "maintainer";
+    const actor = resolveChatQaActor(gate.identity);
     const targetKey = `${fullName}#${number}#chat`;
-    /* v8 ignore next -- resolveRepositorySettings always resolves a concrete "off"/"hold"; the undefined side is defensive against the field's optional TS type. */
-    const policy = settings.commandRateLimitPolicy ?? "off";
+    const { policy, maxPerWindow, windowHours } = resolveChatQaRateLimit(settings);
     if (policy !== "off") {
-      /* v8 ignore next 2 -- resolveRepositorySettings always resolves concrete positive integers; undefined sides are defensive against optional TS types. */
-      const maxPerWindow = settings.commandRateLimitAiMaxPerWindow ?? 5;
-      const windowHours = settings.commandRateLimitWindowHours ?? 24;
       const sinceIso = new Date(Date.now() - windowHours * 60 * 60 * 1000).toISOString();
       const priorInvocations = await countRecentAuditEventsForActorAndTarget(c.env, actor, COMMAND_RATE_LIMIT_EVENT_TYPE, targetKey, sinceIso);
       const invocationCount = priorInvocations + 1;
       // Always record the invocation first so the running count reflects reality even on the throttled
       // path below, mirroring maybeThrottleLoopOverCommand's own ordering (queue/processors.ts).
-      // Audit write failures are swallowed so they never block the request.
       await recordAuditEvent(c.env, {
         eventType: COMMAND_RATE_LIMIT_EVENT_TYPE,
         actor,
@@ -2995,7 +2987,7 @@ export function createApp() {
     }
 
     const bundle = await planNextWork(c.env, {
-      login: pullRequest.authorLogin ?? actor,
+      login: resolveChatQaGroundingLogin(pullRequest.authorLogin, actor),
       repoFullName: fullName,
       surface: "api",
       objective: `Respond to @loopover chat for ${fullName}#${number}. Question: ${parsed.data.question.slice(0, 280)}`,
