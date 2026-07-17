@@ -1,10 +1,10 @@
 {
-  "name": "Gittensory Issue Auto-Triage",
+  "name": "LoopOver Issue Auto-Triage",
   "nodes": [
     {
       "parameters": {
         "httpMethod": "POST",
-        "path": "gittensory-pr-closed",
+        "path": "loopover-pr-closed",
         "responseMode": "onReceived",
         "options": {}
       },
@@ -13,7 +13,7 @@
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
       "position": [0, 0],
-      "webhookId": "gittensory-pr-closed"
+      "webhookId": "loopover-pr-closed"
     },
     {
       "parameters": {
@@ -92,6 +92,6 @@
   "pinData": {},
   "meta": {
     "templateCredsSetupCompleted": false,
-    "instanceId": "gittensory-issue-auto-triage"
+    "instanceId": "loopover-issue-auto-triage"
   }
 }

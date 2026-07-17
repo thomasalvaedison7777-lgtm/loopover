@@ -1,5 +1,5 @@
 {
-  "name": "Gittensory Gate Daily Summary",
+  "name": "LoopOver Gate Daily Summary",
   "nodes": [
     {
       "parameters": {
@@ -21,7 +21,7 @@
     {
       "parameters": {
         "method": "GET",
-        "url": "={{ $env.GITTENSORY_GATE_SUMMARY_URL ?? 'http://loopover:8787/v1/app/selfhost/gate/summary' }}",
+        "url": "={{ $env.LOOPOVER_GATE_SUMMARY_URL ?? 'http://loopover:8787/v1/app/selfhost/gate/summary' }}",
         "options": {}
       },
       "id": "fetch-summary",
@@ -33,7 +33,7 @@
     {
       "parameters": {
         "method": "POST",
-        "url": "={{ $env.GITTENSORY_SUMMARY_WEBHOOK_URL ?? 'https://example.com/webhook' }}",
+        "url": "={{ $env.LOOPOVER_SUMMARY_WEBHOOK_URL ?? 'https://example.com/webhook' }}",
         "sendBody": true,
         "specifyBody": "json",
         "jsonBody": "={{ $json }}",
@@ -73,6 +73,6 @@
   "pinData": {},
   "meta": {
     "templateCredsSetupCompleted": false,
-    "instanceId": "gittensory-gate-daily-summary"
+    "instanceId": "loopover-gate-daily-summary"
   }
 }

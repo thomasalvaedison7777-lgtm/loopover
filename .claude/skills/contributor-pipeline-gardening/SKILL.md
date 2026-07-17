@@ -1,7 +1,7 @@
 ---
 name: contributor-pipeline-gardening
 description: >-
-  Maintenance of the contributor issue pipeline for JSONbored/gittensory (renamed to loopover) —
+  Maintenance of the contributor issue pipeline for JSONbored/loopover —
   closing issues that are already done but not marked so, and keeping the contributor-available
   backlog at its 50-100+ steady-state floor with well-scoped new issues. Runs every ~8h via the
   scheduled task (raised from daily on 2026-07-15 so the floor is maintained continuously, not
@@ -11,7 +11,7 @@ description: >-
   read it before doing real work, not just this file.
 ---
 
-# Contributor pipeline gardening — gittensory / loopover
+# Contributor pipeline gardening — loopover
 
 This repo runs on a **steady stream of well-scoped, correctly-labeled issues** for contributors —
 see `.claude/skills/contributing-to-loopover/`. Contributors can only open a PR that links a real,
@@ -35,7 +35,7 @@ assume it keeps happening, don't assume today's backlog is clean.
 
 **Method — GitHub's cross-reference timeline, not text search:**
 
-1. Pull the full open-issue list: `gh issue list --repo JSONbored/gittensory --state open --limit 1000 --json number,title,labels,milestone,createdAt`.
+1. Pull the full open-issue list: `gh issue list --repo JSONbored/loopover --state open --limit 1000 --json number,title,labels,milestone,createdAt`.
 2. For every open issue, query which merged PRs ever referenced it, via GraphQL `timelineItems(itemTypes: [CROSS_REFERENCED_EVENT])` → `source { ... on PullRequest { number state merged } }` and `willCloseTarget`. Batch in chunks of ~20 issues per query using aliases (`i1234: issue(number: 1234) { ... }`) to stay under complexity limits.
    - **Important CLI gotcha:** `gh api graphql -f query=@file` does NOT read from a file — `-f` treats `@file` as a literal string and the query fails with a cryptic parse error. Use **`-F query=@file`** (capital F) instead; only `-F`/`--field` supports the `@filename` file-read syntax.
 3. Any issue where `willCloseTarget=true` on a merged PR but the issue is still open is worth a first look (should have auto-closed and didn't — check why, e.g. merged to a non-default branch). In practice this repo hasn't produced any of these yet; don't assume it stays that way.

@@ -1,4 +1,4 @@
-# Contributor pipeline gardening — reference (gittensory / loopover)
+# Contributor pipeline gardening — reference (loopover)
 
 ## Docs architecture is mid-migration (as of 2026-07-15) — don't generate old-pattern docs issues
 

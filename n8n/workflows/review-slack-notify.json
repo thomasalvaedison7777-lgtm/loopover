@@ -1,19 +1,19 @@
 {
-  "name": "Gittensory Review → Slack",
+  "name": "LoopOver Review → Slack",
   "nodes": [
     {
       "parameters": {
         "httpMethod": "POST",
-        "path": "gittensory-review",
+        "path": "loopover-review",
         "responseMode": "onReceived",
         "options": {}
       },
       "id": "webhook-review",
-      "name": "Gittensory review webhook",
+      "name": "LoopOver review webhook",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
       "position": [0, 0],
-      "webhookId": "gittensory-review"
+      "webhookId": "loopover-review"
     },
     {
       "parameters": {
@@ -35,7 +35,7 @@
     }
   ],
   "connections": {
-    "Gittensory review webhook": {
+    "LoopOver review webhook": {
       "main": [
         [
           {
@@ -50,6 +50,6 @@
   "pinData": {},
   "meta": {
     "templateCredsSetupCompleted": false,
-    "instanceId": "gittensory-review-slack-notify"
+    "instanceId": "loopover-review-slack-notify"
   }
 }

@@ -12,7 +12,7 @@
 # PRs are the same operator-facing noise if that ever changes) so none of the three clutter an
 # operator-facing image changelog. Deliberately does NOT exclude `sentry[bot]` (Seer-authored fixes for
 # real production errors, e.g. #3305, get a normal `gittensor:bug` label and are exactly the kind of
-# change this changelog exists to surface) or `gittensory-orb[bot]` (the review engine's own rare, real
+# change this changelog exists to surface) or `loopover-orb[bot]` (the review engine's own rare, real
 # content changes, e.g. #3397).
 changelog:
   exclude:
