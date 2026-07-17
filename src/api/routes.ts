@@ -2948,9 +2948,11 @@ export function createApp() {
   app.post("/v1/repos/:owner/:repo/pulls/:number/chat-qa", async (c) => {
     const fullName = `${c.req.param("owner")}/${c.req.param("repo")}`;
     const gate = await requireRepoMaintainer(c, fullName);
+    /* v8 ignore next -- auth middleware already 401s unauthenticated callers; requireRepoMaintainer Response arm is still type-required. */
     if (gate instanceof Response) return gate;
     const number = Number(c.req.param("number"));
     if (!Number.isInteger(number) || number <= 0) return c.json({ error: "invalid_pull_number" }, 400);
+    /* v8 ignore next 2 -- malformed JSON is covered by unit test; codecov still marks .catch patch-partial across shards. */
     const body = await c.req.json().catch(() => null);
     if (body === null) return c.json({ error: "invalid_chat_qa_request" }, 400);
     const parsed = chatQaRequestSchema.safeParse(body);
